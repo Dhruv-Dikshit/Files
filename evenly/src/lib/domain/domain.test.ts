@@ -34,6 +34,10 @@ describe("money", () => {
     expect(parseMoney("1.005", "USD")).toBe(101); // half-up
     expect(parseMoney("1500", "JPY")).toBe(1500);
     expect(parseMoney("abc", "USD")).toBeNull();
+    expect(parseMoney("₹1,234.50", "INR")).toBe(123450);
+    expect(parseMoney("Rs. 500", "INR")).toBe(50000);
+    expect(parseMoney("500 rs", "INR")).toBe(50000);
+    expect(parseMoney("$ 12", "USD")).toBe(1200);
     expect(parseMoney("", "USD")).toBeNull();
   });
 

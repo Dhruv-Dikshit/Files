@@ -24,7 +24,11 @@ export function currencyDecimals(currency: CurrencyCode): number {
  */
 export function parseMoney(input: string | number, currency: CurrencyCode): Minor | null {
   const decimals = currencyDecimals(currency);
-  const raw = String(input).trim().replace(/[,\s_]/g, "");
+  // Tolerate what people actually type: "₹1,234.50", "Rs. 500", "500 rs", "$ 12".
+  const raw = String(input)
+    .trim()
+    .replace(/\b[a-z]{1,3}\.?/gi, "") // currency words/abbreviations (Rs., INR, usd)
+    .replace(/[^\d.\-]/g, ""); // symbols, spaces and thousands separators
   if (raw === "") return null;
   const match = /^(-)?(\d*)(?:\.(\d*))?$/.exec(raw);
   if (!match || (match[2] === "" && (match[3] ?? "") === "")) return null;

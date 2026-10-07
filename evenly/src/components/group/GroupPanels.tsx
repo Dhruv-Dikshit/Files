@@ -9,6 +9,7 @@ import type { ActionResult, ActivityEvent, Group, RecurringTemplate } from "@/li
 import { addMember, deleteSettlement, removeMember, restoreExpense, setMemberStatus, stopRecurring } from "@/server/actions";
 import { CATEGORIES } from "@/components/expense/AddExpenseModal";
 import { Amount, Avatar, Button, Card, Icon, IconTile, Input, SectionLabel, Tag, cx, type IconName } from "@/components/ui/primitives";
+import { callAction } from "@/lib/call-action";
 
 const PERIOD = { daily: "day", weekly: "week", monthly: "month", yearly: "year" } as const;
 /** Run a server action from an event handler and surface its error, if any. */
@@ -16,7 +17,7 @@ function useAction() {
   const [pending, startTransition] = useTransition();
   const run = (action: () => Promise<ActionResult<unknown>>, after?: () => void) =>
     startTransition(async () => {
-      const result = await action();
+      const result = await callAction(action);
       if (!result.ok) alert(result.error);
       else after?.();
     });

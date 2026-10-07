@@ -8,6 +8,7 @@ import { formatMoney } from "@/lib/domain/money";
 import type { Group } from "@/lib/types";
 import { createGroup } from "@/server/actions";
 import { Amount, AvatarStack, Button, Card, Icon, IconTile, Input, Label, Modal, selectClass } from "@/components/ui/primitives";
+import { callAction } from "@/lib/call-action";
 
 export interface DashboardRow {
   group: Group;
@@ -142,7 +143,7 @@ function CreateGroupModal({ open, onClose, onCreated }: { open: boolean; onClose
           e.preventDefault();
           setError(null);
           startTransition(async () => {
-            const result = await createGroup({ name, emoji, baseCurrency: currency, memberNames: members.split(",") });
+            const result = await callAction(() => createGroup({ name, emoji, baseCurrency: currency, memberNames: members.split(",") }));
             if (!result.ok) return setError(result.error);
             onClose();
             onCreated(result.data);

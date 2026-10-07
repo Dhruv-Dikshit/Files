@@ -12,6 +12,7 @@ import { ItemizedEditor } from "./ItemizedEditor";
 import { MemberSplitList } from "./MemberSplitList";
 import { PaidBySection } from "./PaidBySection";
 import { useExpenseForm, type ExpenseForm } from "./useExpenseForm";
+import { callAction } from "@/lib/call-action";
 
 export const CATEGORIES: { value: ExpenseCategory; label: string; icon: string }[] = [
   { value: "food", label: "Food", icon: "🍽️" },
@@ -60,17 +61,22 @@ function AddExpenseForm({ group, meId, onClose, expense }: Props) {
 
   const [pending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
+  // Validation messages appear as you type once an amount is entered, and
+  // always after you press Add — the button never just sits there greyed out.
+  const [attempted, setAttempted] = useState(false);
 
   function save() {
     setServerError(null);
     startTransition(async () => {
-      const result = await saveExpense({
-        groupId: group.id,
-        draft: form.toDraft(),
-        expenseId: expense?.id,
-        version: expense?.version,
-        repeat: !expense && state.repeat.enabled ? { frequency: state.repeat.frequency, interval: state.repeat.interval } : undefined,
-      });
+      const result = await callAction(() =>
+        saveExpense({
+          groupId: group.id,
+          draft: form.toDraft(),
+          expenseId: expense?.id,
+          version: expense?.version,
+          repeat: !expense && state.repeat.enabled ? { frequency: state.repeat.frequency, interval: state.repeat.interval } : undefined,
+        }),
+      );
       if (result.ok) onClose();
       else setServerError(result.error);
     });
@@ -79,7 +85,7 @@ function AddExpenseForm({ group, meId, onClose, expense }: Props) {
   function remove() {
     if (!expense || !confirm(`Delete “${expense.description}”? You can restore it from the activity feed.`)) return;
     startTransition(async () => {
-      const result = await deleteExpense(group.id, expense.id);
+      const result = await callAction(() => deleteExpense(group.id, expense.id));
       if (result.ok) onClose();
       else setServerError(result.error);
     });
@@ -90,6 +96,7 @@ function AddExpenseForm({ group, meId, onClose, expense }: Props) {
       className="space-y-6"
       onSubmit={(e) => {
         e.preventDefault();
+        setAttempted(true);
         if (form.isValid) save();
       }}
     >
@@ -163,21 +170,31 @@ function AddExpenseForm({ group, meId, onClose, expense }: Props) {
       </section>
 
       {/* ── Footer ─────────────────────────────────────────── */}
-      <div className="sticky bottom-0 -mx-5 -mb-4 flex items-center gap-2 bg-bg/95 px-5 py-3 backdrop-blur">
-        {expense && (
-          <Button variant="danger" disabled={pending} onClick={remove}>
-            Delete
-          </Button>
+      <div className="sticky bottom-0 -mx-5 -mb-4 space-y-2 bg-bg/95 px-5 py-3 backdrop-blur">
+        {(serverError || ((attempted || form.total > 0) && form.errors.length > 0)) && (
+          <div role="alert" className="rounded-[14px] bg-danger/10 px-3 py-2 text-[12px] leading-5 text-danger">
+            {serverError ?? (
+              <>
+                {form.errors[0]}
+                {form.errors.length > 1 && <span className="text-danger/70"> (+{form.errors.length - 1} more)</span>}
+              </>
+            )}
+          </div>
         )}
-        <p className="flex-1 truncate text-[11px] leading-5 text-danger" role="status">
-          {serverError ?? (form.total > 0 && form.errors[0])}
-        </p>
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={!form.isValid || pending}>
-          {pending ? "Saving…" : expense ? "Save changes" : "Add expense"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {expense && (
+            <Button variant="danger" disabled={pending} onClick={remove}>
+              Delete
+            </Button>
+          )}
+          <span className="flex-1" />
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={pending}>
+            {pending ? "Saving…" : expense ? "Save changes" : "Add expense"}
+          </Button>
+        </div>
       </div>
     </form>
   );

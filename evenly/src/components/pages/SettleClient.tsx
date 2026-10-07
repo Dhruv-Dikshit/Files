@@ -6,9 +6,10 @@ import { formatMoney, minorToInput, parseMoney } from "@/lib/domain/money";
 import { simplifyDebts } from "@/lib/domain/simplify";
 import type { Transfer } from "@/lib/domain/types";
 import { today } from "@/lib/ids";
-import type { GroupView } from "@/lib/types";
+import type { ActionResult, GroupView } from "@/lib/types";
 import { recordSettlement } from "@/server/actions";
 import { Avatar, Button, Input, Label, Modal, NavBar, Tag, cx } from "@/components/ui/primitives";
+import { callAction } from "@/lib/call-action";
 
 /**
  * Settlement screen: the optimised transfer plan, how many payments it
@@ -120,7 +121,7 @@ export function SettleClient({ view }: { view: GroupView }) {
 }
 
 /** Allows partial payments: defaults to the full suggested amount. */
-function RecordPaymentModal({ transfer, currency, fromName, toName, onClose, onConfirm }: { transfer: Transfer; currency: string; fromName: string; toName: string; onClose: () => void; onConfirm: (amount: number, method: string) => Promise<{ ok: boolean; error?: string }> }) {
+function RecordPaymentModal({ transfer, currency, fromName, toName, onClose, onConfirm }: { transfer: Transfer; currency: string; fromName: string; toName: string; onClose: () => void; onConfirm: (amount: number, method: string) => Promise<ActionResult<unknown>> }) {
   const [amount, setAmount] = useState(minorToInput(transfer.amount, currency));
   const [method, setMethod] = useState("UPI");
   const [pending, startTransition] = useTransition();
@@ -134,9 +135,9 @@ function RecordPaymentModal({ transfer, currency, fromName, toName, onClose, onC
           e.preventDefault();
           if (minor <= 0) return;
           startTransition(async () => {
-            const result = await onConfirm(minor, method);
+            const result = await callAction(() => onConfirm(minor, method));
             if (result.ok) onClose();
-            else setError(result.error ?? "Couldn't record the payment.");
+            else setError(result.error);
           });
         }}
       >

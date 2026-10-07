@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import type { Group } from "@/lib/types";
 import { joinGroup } from "@/server/actions";
 import { Avatar, Button, Card, Icon, IconTile, Input, Label, RadioMark, cx } from "@/components/ui/primitives";
+import { callAction } from "@/lib/call-action";
 
 /**
  * Join via invite link: pick the placeholder someone already added for you
@@ -44,7 +45,7 @@ export function JoinClient({ group, userName }: { group: Group; userName: string
           e.preventDefault();
           setError(null);
           startTransition(async () => {
-            const result = await joinGroup({ code: group.inviteCode, claimMemberId: choice === "new" ? undefined : choice, name: needsName ? name : undefined });
+            const result = await callAction(() => joinGroup({ code: group.inviteCode, claimMemberId: choice === "new" ? undefined : choice, name: needsName ? name : undefined }));
             if (result.ok) router.push(`/groups/${result.data}`);
             else setError(result.error);
           });
