@@ -16,8 +16,8 @@ export interface Member {
   id: MemberId;
   name: string;
   status: MemberStatus;
-  /** Guests joined via share link and have no full account. */
-  isGuest?: boolean;
+  /** True once a real person (browser profile) has joined as this member. */
+  claimed?: boolean;
   avatarColor?: string;
 }
 
@@ -79,6 +79,8 @@ export interface Expense {
   updatedAt: string;
   recurringId?: string;
   receiptUrl?: string;
+  /** Optimistic-concurrency token; edits must send the version they started from. */
+  version?: number;
 }
 
 export interface Settlement {

@@ -1,78 +1,113 @@
 # Evenly: group expense splitting
 
-A modern take on Splitwise/Splid. Create groups, add expenses with flexible splits, include or exclude people per expense, and settle up in the fewest payments.
+Self-hosted group expense splitting, in the spirit of Splitwise and Splid. Create groups, add expenses with flexible splits, include or exclude people per expense, scan receipts, and settle up in the fewest payments. All data is stored in PostgreSQL on your own machine.
 
-**→ Full design doc: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (product analysis, stack, schema, algorithm, UI plan)
+**→ Design doc: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (product analysis, data model, algorithm, UI plan)
 
-## Quick start
+## Run it on localhost (recommended: Docker)
+
+You only need [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS) or Docker Engine (Linux).
 
 ```bash
 cd evenly
-npm install        # .npmrc sets legacy-peer-deps (works around an npm peer-dep resolver bug)
-npm run dev        # http://localhost:3000, seeded with a "Trip to Goa" demo group
-npm test           # domain unit tests (splits, simplification, currency, recurring, export)
-npm run typecheck
+docker compose up -d --build
 ```
 
-The demo runs entirely in the browser (state is saved to localStorage), so no database is needed to try it. To use Postgres, set `DATABASE_URL` and run `npm run db:migrate`.
+Open **http://localhost:3000**, enter your name, and create your first group.
+
+This starts three services:
+
+| Service | What it does |
+|---|---|
+| `db` | PostgreSQL 17. Data is kept in the `evenly-db` Docker volume. |
+| `migrate` | Creates or updates the database tables, then exits. Runs on every `up`. |
+| `app` | The Evenly web server on port 3000. |
+
+**Always on.** `db` and `app` use `restart: unless-stopped`, so they come back by themselves after a crash or a reboot, as long as Docker itself starts. In Docker Desktop, turn on **Settings → General → Start Docker Desktop when you sign in**. On Linux, run `sudo systemctl enable docker`. After that, Evenly is at `http://localhost:3000` whenever your computer is on.
+
+**Everyday commands**
+
+```bash
+docker compose ps                     # is it running?
+docker compose logs -f app            # live server logs
+docker compose stop                   # stop (data kept)
+docker compose up -d                  # start again
+git pull && docker compose up -d --build   # update to a new version (data kept, migrations applied)
+```
+
+**Backups.** Your data lives in the `evenly-db` volume. `docker compose down` keeps it. **`docker compose down -v` deletes it.**
+
+```bash
+docker compose exec db pg_dump -U evenly evenly > evenly-backup-$(date +%F).sql   # back up
+docker compose exec -T db psql -U evenly evenly < evenly-backup-2026-10-07.sql     # restore into an empty database
+```
+
+**Settings.** Create a `.env` file next to `docker-compose.yml` to override any of these:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `EVENLY_PORT` | `3000` | Port on your computer |
+| `TZ` | `Asia/Kolkata` | Time zone that decides "today" and when recurring expenses post |
+| `POSTGRES_PASSWORD` | `evenly` | Database password. Set it **before** the first `up`; it is fixed once the volume exists |
+
+**Using it from your phone or friends' devices.** The app listens on your local network. Find your computer's IP address (for example `192.168.1.20`) and open `http://192.168.1.20:3000` on any device on the same Wi-Fi. Invite links work the same way. To keep it to this computer only, change the app's port mapping to `"127.0.0.1:3000:3000"`.
+
+> Sign-in is just a name remembered by your browser (no passwords). That's fine on your own computer or home network. **Don't expose it to the internet** without adding real authentication in front of it.
+
+## Develop locally (without building the image)
+
+```bash
+cd evenly
+npm install            # also generates the Prisma client
+cp .env.example .env   # points at the Docker Postgres on localhost:5433
+npm run setup          # starts only the db container and applies migrations
+npm run dev            # http://localhost:3000 with hot reload
+npm test               # unit tests (splits, simplification, currency, recurring, receipts, export)
+npm run typecheck
+npm run db:studio      # browse the database in Prisma Studio
+```
+
+If you'd rather use a Postgres you already have, point `DATABASE_URL` in `.env` at it and run `npm run db:migrate`.
 
 ## Features
 
 | | |
 |---|---|
-| Groups | Create, invite by link or code (`/join/GOA-7K3P`), add, deactivate or remove members |
-| Expenses | Single or multiple payers, categories, dates, edit/delete with an audit trail |
-| Include/exclude | Tap any member in the split list to leave them out of that expense |
+| Groups | Create, invite by link or code, add placeholder people who can claim their spot later, deactivate or remove members |
+| Expenses | Single or multiple payers, categories, dates, editing protected against two people overwriting each other, delete with restore |
+| Include/exclude | Tap anyone in the split list to leave them out of that expense |
 | Split types | Equally · Exact amounts · Percentages · Shares · Itemized (tax/tip shared proportionally) |
-| Debt simplification | Provably minimal number of transfers for ≤15 people, greedy fallback above |
-| Settlements | Mark paid (full or partial, with method), undo |
-| Multi-currency | Per-expense currency with an editable rate frozen at entry; balances in the group's base currency |
-| Receipt OCR | Upload a photo and line items are extracted (mock provider behind a `ReceiptScanner` interface) |
-| Recurring | Weekly/monthly/yearly; month-end safe; idempotent posting |
-| Activity feed | Every create/edit/delete/payment with before→after details |
+| Debt simplification | Provably minimal number of transfers for up to 15 people, greedy fallback above |
+| Settlements | Mark paid (full or partial, with payment method), undo |
+| Multi-currency | Live ECB exchange rates (Frankfurter, cached daily) or your own rate; balances shown in the group currency |
+| Receipt OCR | Tesseract runs on your machine with no API key: photo → line items, taxes and total |
+| Recurring | Weekly/monthly/yearly; if the computer was off, missed occurrences are posted on the next visit |
+| Activity feed | Every change with before→after details |
 | Export | CSV (per-member columns, balances, settle plan) and print-to-PDF |
-| Guest mode | Join with just a name via an invite link |
+| Sync | Open pages refresh when focused and every 20 seconds, so groupmates see each other's changes |
+
+**Needs internet:** only live exchange rates. Without a connection, or for currencies the ECB doesn't publish (such as AED), you type the rate in. Everything else, including OCR, works offline.
 
 ## Project layout
 
 ```
-prisma/schema.prisma            Postgres data model (Users, Groups, GroupMembers, Expenses,
-                                ExpensePayers, ExpenseSplits, ExpenseItems, Settlements,
-                                RecurringExpenses, ActivityLog, ExchangeRates)
-prisma/migrations/0001_init/    Generated SQL
-src/lib/domain/                 Pure TypeScript, framework-free, shared by client and server
-  money.ts                      minor-unit parsing/formatting, largest-remainder allocate()
+docker-compose.yml, Dockerfile  Postgres + migration job + app server
+prisma/schema.prisma            Data model; prisma/migrations/ holds the SQL
+src/lib/domain/                 Pure TypeScript shared by browser and server
+  money.ts                      minor-unit parsing/formatting, exact allocate()
   splits.ts                     computeSplit() for all five split types, validatePayers()
   simplify.ts                   simplifyDebts(): minimum transfers
-  balances.ts                   computeBalances() with multi-currency, summarizeMembers()
-  currency.ts                   convertMinor/convertParts, rate providers
-  recurring.ts                  dueOccurrences(), nextOccurrence()
-  export.ts                     exportGroupCSV()
-  receipts.ts                   ReceiptScanner interface + mock
-  domain.test.ts                tests
-src/components/expense/         Add Expense form
-  useExpenseForm.ts             reducer + derived split preview + validation + toDraft()
-  AddExpenseModal.tsx           the sheet: basics, FX, paid-by, split type, status, footer
-  MemberSplitList.tsx           include/exclude toggles + per-member inputs + live shares
-  PaidBySection.tsx             single / multiple payers
-  ItemizedEditor.tsx            line items, assignees, receipt scan
-src/components/group/           Expense list, balances, activity feed, members panel
-src/app/                        Dashboard, group view, settle-up, guest join, OCR API route
-src/lib/store/                  Demo client store (swap for server actions + realtime)
-```
-
-## Using the core functions
-
-```ts
-import { computeSplit, simplifyDebts, parseMoney } from "@/lib/domain";
-
-const total = parseMoney("3000", "INR")!;           // 300000 paise
-computeSplit(total, {
-  type: "shares",
-  included: ["you", "aisha", "rohan", "meera"],     // Kabir excluded
-  shares: { you: 2 },                                // others default to 1
-}).owed;
-// → { you: 120000, aisha: 60000, rohan: 60000, meera: 60000 }
-
-simplifyDebts({ a: 6, b: 5, c: -5, d: -4, e: -2 }); // 3 transfers (greedy would need 4)
+  balances.ts                   computeBalances() with multi-currency
+  currency.ts, recurring.ts, export.ts
+  receipts.ts                   parseReceiptText(): OCR text → items/taxes/total
+src/server/                     Server-only code
+  actions.ts                    every mutation (validate → transaction + activity log)
+  queries.ts                    page data loaders
+  write.ts                      draft validation (re-runs split math) + row builders
+  session.ts                    cookie-based profile
+  recurring.ts, rates.ts, ocr.ts, mappers.ts, db.ts
+src/components/expense/         Add Expense form (useExpenseForm + sections)
+src/components/group/           Expense list, balances, activity feed, members
+src/components/pages/           Client views for each screen
+src/app/                        Routes: /, /welcome, /groups/[id], /groups/[id]/settle, /join/[code], /api/receipts/scan
 ```

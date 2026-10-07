@@ -1,19 +1,32 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { summarizeMembers } from "@/lib/domain/balances";
 import { exportGroupCSV } from "@/lib/domain/export";
 import { formatMoney } from "@/lib/domain/money";
 import type { Expense, Settlement } from "@/lib/domain/types";
-import { addMember, canRemoveMember, deleteSettlement, removeMember, setMemberStatus, stopRecurring, useAppState } from "@/lib/store/store";
-import type { ActivityEvent, Group } from "@/lib/store/types";
+import type { ActionResult, ActivityEvent, Group, RecurringTemplate } from "@/lib/types";
+import { addMember, deleteSettlement, removeMember, restoreExpense, setMemberStatus, stopRecurring } from "@/server/actions";
 import { CATEGORIES } from "@/components/expense/AddExpenseModal";
 import { Amount, Avatar, Button, Card, Input, cx } from "@/components/ui/primitives";
 
 const PERIOD = { daily: "day", weekly: "week", monthly: "month", yearly: "year" } as const;
+/** Run a server action from an event handler and surface its error, if any. */
+function useAction() {
+  const [pending, startTransition] = useTransition();
+  const run = (action: () => Promise<ActionResult<unknown>>, after?: () => void) =>
+    startTransition(async () => {
+      const result = await action();
+      if (!result.ok) alert(result.error);
+      else after?.();
+    });
+  return [pending, run] as const;
+}
+
 const nameOf = (group: Group, id: string) => group.members.find((m) => m.id === id)?.name ?? "Unknown";
 
 export function ExpenseList({ group, meId, expenses, settlements, onEdit }: { group: Group; meId: string; expenses: Expense[]; settlements: Settlement[]; onEdit: (e: Expense) => void }) {
+  const [pending, run] = useAction();
   type Row = { kind: "expense"; date: string; at: string; e: Expense } | { kind: "settlement"; date: string; at: string; s: Settlement };
   const rows: Row[] = [
     ...expenses.map((e) => ({ kind: "expense" as const, date: e.date, at: e.createdAt, e })),
@@ -43,7 +56,12 @@ export function ExpenseList({ group, meId, expenses, settlements, onEdit }: { gr
                 <span className="block text-xs text-zinc-500">{s.date} · settlement{s.note ? ` · ${s.note}` : ""}</span>
               </span>
               <span className="font-semibold tabular-nums">{formatMoney(s.amount, s.currency)}</span>
-              <button type="button" className="text-xs text-zinc-400 hover:text-red-500" onClick={() => confirm("Undo this payment?") && deleteSettlement(s.id)}>
+              <button
+                type="button"
+                disabled={pending}
+                className="text-xs text-zinc-400 hover:text-red-500"
+                onClick={() => confirm("Undo this payment?") && run(() => deleteSettlement(group.id, s.id))}
+              >
                 undo
               </button>
             </li>
@@ -153,15 +171,17 @@ const ACTIVITY_ICONS: Partial<Record<ActivityEvent["action"], string>> = {
   settlement_deleted: "↩️",
   member_joined: "👋",
   member_deactivated: "⏸️",
-  member_reactivated: "▶️",
+  expense_restored: "♻️",
   member_removed: "🚪",
   recurring_posted: "↻",
   group_created: "✨",
 };
 
-export function ActivityFeed({ activity }: { activity: ActivityEvent[] }) {
+export function ActivityFeed({ activity, groupId, liveExpenseIds }: { activity: ActivityEvent[]; groupId: string; liveExpenseIds: Set<string> }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [pending, run] = useAction();
   const sorted = useMemo(() => [...activity].sort((a, b) => b.at.localeCompare(a.at)), [activity]);
+  if (activity.length === 0) return <p className="text-sm text-zinc-500">No activity yet.</p>;
   return (
     <ol className="relative space-y-1 border-l border-zinc-200 pl-5 dark:border-zinc-800">
       {sorted.map((a) => (
@@ -175,6 +195,11 @@ export function ActivityFeed({ activity }: { activity: ActivityEvent[] }) {
             {a.diff && (
               <button type="button" className="ml-2 text-emerald-600 hover:underline" onClick={() => setOpen(open === a.id ? null : a.id)}>
                 {open === a.id ? "hide details" : "details"}
+              </button>
+            )}
+            {a.action === "expense_deleted" && !liveExpenseIds.has(a.entityId) && (
+              <button type="button" disabled={pending} className="ml-2 text-emerald-600 hover:underline" onClick={() => run(() => restoreExpense(groupId, a.entityId))}>
+                restore
               </button>
             )}
           </p>
@@ -206,10 +231,10 @@ function DiffView({ diff }: { diff: NonNullable<ActivityEvent["diff"]> }) {
   );
 }
 
-export function MembersPanel({ group, meId }: { group: Group; meId: string }) {
+export function MembersPanel({ group, meId, removableIds, recurring }: { group: Group; meId: string; removableIds: string[]; recurring: RecurringTemplate[] }) {
   const [name, setName] = useState("");
-  const appState = useAppState((s) => s);
-  const recurring = appState.recurring.filter((r) => r.groupId === group.id && r.active);
+  const [copied, setCopied] = useState(false);
+  const [pending, run] = useAction();
   const path = `/join/${group.inviteCode}`;
 
   return (
@@ -218,12 +243,20 @@ export function MembersPanel({ group, meId }: { group: Group; meId: string }) {
         <p className="text-sm font-medium">Invite people</p>
         <div className="flex items-center gap-2">
           <code className="flex-1 truncate rounded-lg bg-zinc-100 px-3 py-2 text-xs dark:bg-zinc-800">{path}</code>
-          <Button variant="secondary" onClick={() => navigator.clipboard?.writeText(window.location.origin + path)}>
-            Copy link
+          <Button
+            variant="secondary"
+            onClick={() => {
+              navigator.clipboard?.writeText(window.location.origin + path);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? "Copied ✓" : "Copy link"}
           </Button>
         </div>
         <p className="text-xs text-zinc-500">
-          Or share the code <b className="font-mono">{group.inviteCode}</b>. Guests can join with just a name — no account required.
+          Or share the code <b className="font-mono">{group.inviteCode}</b>. People join with just their name and can claim a spot you added for them. Others on your
+          Wi-Fi can open the link using this computer&apos;s network address instead of <span className="font-mono">localhost</span>.
         </p>
       </Card>
 
@@ -235,16 +268,21 @@ export function MembersPanel({ group, meId }: { group: Group; meId: string }) {
             <span className={cx("flex-1 text-sm", m.status === "inactive" && "text-zinc-400")}>
               {m.name}
               {m.id === meId && <span className="ml-1 text-xs text-zinc-500">(you)</span>}
-              {m.isGuest && <span className="ml-1 text-xs text-zinc-500">· guest</span>}
+              {!m.claimed && <span className="ml-1 text-xs text-zinc-500">· hasn&apos;t joined</span>}
               {m.status === "inactive" && <span className="ml-1 text-xs">· inactive</span>}
             </span>
             {m.id !== meId && (
               <>
-                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => setMemberStatus(group.id, m.id, m.status === "active" ? "inactive" : "active")}>
+                <Button
+                  variant="ghost"
+                  className="px-2 py-1 text-xs"
+                  disabled={pending}
+                  onClick={() => run(() => setMemberStatus(group.id, m.id, m.status === "active" ? "inactive" : "active"))}
+                >
                   {m.status === "active" ? "Deactivate" : "Reactivate"}
                 </Button>
-                {canRemoveMember(appState, group.id, m.id) && (
-                  <Button variant="danger" className="px-2 py-1 text-xs" onClick={() => removeMember(group.id, m.id)}>
+                {removableIds.includes(m.id) && (
+                  <Button variant="danger" className="px-2 py-1 text-xs" disabled={pending} onClick={() => run(() => removeMember(group.id, m.id))}>
                     Remove
                   </Button>
                 )}
@@ -256,12 +294,11 @@ export function MembersPanel({ group, meId }: { group: Group; meId: string }) {
           className="flex gap-2 pt-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim()) addMember(group.id, name, { actorId: meId });
-            setName("");
+            if (name.trim()) run(() => addMember(group.id, name), () => setName(""));
           }}
         >
           <Input placeholder="Add someone by name" value={name} onChange={(e) => setName(e.target.value)} />
-          <Button type="submit" variant="secondary">
+          <Button type="submit" variant="secondary" disabled={pending || !name.trim()}>
             Add
           </Button>
         </form>
@@ -275,13 +312,13 @@ export function MembersPanel({ group, meId }: { group: Group; meId: string }) {
             <div key={r.id} className="flex items-center gap-3 text-sm">
               <span className="text-lg">↻</span>
               <span className="flex-1">
-                {r.draft.description}
+                {r.description}
                 <span className="block text-xs text-zinc-500">
-                  {formatMoney(r.draft.amount, r.draft.currency)} · every {r.rule.interval > 1 ? `${r.rule.interval} ` : ""}
-                  {PERIOD[r.rule.frequency]} · last posted {r.lastPosted ?? "never"}
+                  {formatMoney(r.amount, r.currency)} · every {r.rule.interval > 1 ? `${r.rule.interval} ` : ""}
+                  {PERIOD[r.rule.frequency]} · next on {r.nextRun}
                 </span>
               </span>
-              <Button variant="ghost" className="text-xs" onClick={() => stopRecurring(r.id)}>
+              <Button variant="ghost" className="text-xs" disabled={pending} onClick={() => confirm(`Stop repeating “${r.description}”?`) && run(() => stopRecurring(group.id, r.id))}>
                 Stop
               </Button>
             </div>

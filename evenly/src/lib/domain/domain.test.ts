@@ -7,6 +7,7 @@ import {
   dueOccurrences,
   exportGroupCSV,
   parseMoney,
+  parseReceiptText,
   simplifyDebts,
   validatePayers,
   type Balances,
@@ -229,5 +230,51 @@ describe("recurring", () => {
   it("only returns occurrences after the last posted date", () => {
     const rule = { frequency: "weekly" as const, interval: 2, startDate: "2026-01-01" };
     expect(dueOccurrences(rule, "2026-02-15", "2026-01-15")).toEqual(["2026-01-29", "2026-02-12"]);
+  });
+});
+
+describe("receipt parsing", () => {
+  const text = `SPICE ROUTE
+Panjim, Goa
+Bill No: 1042  Table 7
+Butter Chicken      420.00
+Garlic Naan x4      240.00
+MANGO LASSI         180.00
+Sub Total           840.00
+CGST 2.5%            21.00
+SGST 2.5%            21.00
+Service Charge       84.00
+Grand Total        ₹ 966.00
+Paid by UPI         966.00`;
+
+  it("separates items, taxes and the total", () => {
+    const r = parseReceiptText(text, "INR");
+    expect(r.merchant).toBe("Spice Route");
+    expect(r.items).toEqual([
+      { label: "Butter Chicken", amount: 42000 },
+      { label: "Garlic Naan x4", amount: 24000 },
+      { label: "Mango Lassi", amount: 18000 },
+    ]);
+    expect(r.extras.map((e) => e.amount)).toEqual([2100, 2100, 8400]);
+    expect(r.total).toBe(96600);
+    expect(r.totalFound).toBe(true);
+  });
+
+  it("feeds straight into an itemized split that sums to the bill", () => {
+    const r = parseReceiptText(text, "INR");
+    const split = computeSplit(r.total, {
+      type: "itemized",
+      included: ["a", "b"],
+      items: r.items.map((it, i) => ({ id: String(i), label: it.label, amount: it.amount, assignees: i === 0 ? ["a"] : ["a", "b"] })),
+    });
+    expect(split.errors).toEqual([]);
+    expect(sumValues(split.owed)).toBe(96600);
+  });
+
+  it("falls back to items + extras when no total line exists, and handles decimal commas", () => {
+    const r = parseReceiptText("Café Berlin\nCappuccino 3,50\nCroissant 2,20\nMwSt 0,80", "EUR");
+    expect(r.items.map((i) => i.amount)).toEqual([350, 220]);
+    expect(r.total).toBe(650);
+    expect(r.totalFound).toBe(false);
   });
 });

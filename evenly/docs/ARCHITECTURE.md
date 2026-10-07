@@ -33,6 +33,26 @@ How the main products compare, and what Evenly takes from each:
 
 ## 2. Tech stack
 
+### What ships today: self-hosted on localhost
+
+| Layer | Choice |
+|---|---|
+| App | Next.js 16 (App Router, Server Components + Server Actions), React 19, TypeScript, Tailwind 4 |
+| Database | **PostgreSQL 17 in Docker** (`docker-compose.yml`), with a named volume for persistence |
+| Data access | Prisma 7 + `@prisma/adapter-pg` (no native query engine binary) |
+| Identity | Name-only profile stored in an httpOnly cookie (`src/server/session.ts`); placeholder members can be claimed through invite links |
+| Sync | Server Actions revalidate the page; open tabs refresh on focus and every 20 s |
+| FX | Frankfurter (ECB) fetched on demand and cached per day in `exchange_rates`; a manual rate is always allowed |
+| OCR | Tesseract.js worker on the server (`src/server/ocr.ts`) → `parseReceiptText` |
+| Recurring | Posted on page load (catches up after downtime); unique `(recurring_id, date)` makes it idempotent |
+| Hosting | Docker Compose: `db` + one-shot `migrate` + `app` (standalone Next.js), all `restart: unless-stopped` |
+
+**Why local Postgres in Docker?** It is the same database engine you'd use in production, so the schema, transactions and constraints don't change if you move to a hosted Postgres later. It costs nothing, needs no account, keeps your data on your machine, and Docker's restart policy keeps it running. SQLite would avoid Docker but lacks the enum, decimal and concurrency behaviour this schema relies on. A hosted database (Supabase, Neon) only becomes worthwhile if you want access from outside your home network.
+
+### Scaling up to a hosted product
+The table below is the target stack if Evenly becomes a public multi-tenant service. Moving to it means swapping `DATABASE_URL`, replacing `session.ts` with Supabase Auth, and adding a Realtime channel.
+
+
 | Layer | Choice | Why |
 |---|---|---|
 | Web app | **Next.js 16 (App Router) + React 19 + TypeScript** | Server Components for fast first paint, Server Actions for mutations, one codebase for UI and API |
@@ -42,7 +62,7 @@ How the main products compare, and what Evenly takes from each:
 | Realtime | **Supabase Realtime** (Postgres changes / broadcast per group) | Live updates when a groupmate adds an expense, with no extra infrastructure |
 | Auth | **Supabase Auth** with **anonymous sign-ins** | Guest mode: an anonymous user can later link email/OAuth and keep the same `user_id` |
 | Files | **Supabase Storage** | Receipt images, signed URLs |
-| OCR | `ReceiptScanner` interface → Google Document AI Expense / AWS Textract AnalyzeExpense / vision LLM | Swappable. The demo ships a mock |
+| OCR | **Tesseract.js** on the server, with English data bundled from npm | Free, offline, no API key. The `ReceiptScanner` interface lets you swap in Document AI, Textract or a vision LLM for better accuracy |
 | FX rates | Frankfurter (ECB) → cached in `exchange_rates` | Free and keyless. Swap for Open Exchange Rates if you need intraday rates |
 | Jobs | **Vercel Cron** or **Supabase pg_cron** → `/api/cron/recurring`, `/api/cron/rates` | Recurring expenses and daily rate refresh |
 | Client data | TanStack Query + Realtime invalidation | Optimistic updates, cache, retry |
@@ -167,14 +187,14 @@ Dashboard ──tap group──► Group View ──[+ Add expense]──► Add
 ### Component hierarchy (as implemented)
 ```
 RootLayout (app/layout.tsx)
-└── Providers (store hydration → in prod: QueryClient + Realtime)
+└── Providers (refreshes server data on focus and every 20 s)
     ├── Dashboard (app/page.tsx)
     │   ├── Totals cards (owed / owe, per currency)
     │   ├── Group list rows (emoji, avatars, your balance)
     │   ├── Join-by-code form
     │   └── CreateGroupModal
     ├── GroupPage (app/groups/[groupId]/page.tsx)
-    │   ├── Group header (your balance, per-member chips, Settle up, "viewing as")
+    │   ├── Group header (your balance, per-member chips, Settle up)
     │   ├── Segmented tabs
     │   │   ├── ExpenseList (expenses + settlements, "you lent / borrowed", excluded count)
     │   │   ├── BalancesPanel (bars, paid vs share, Export CSV, Save as PDF)
@@ -195,7 +215,8 @@ RootLayout (app/layout.tsx)
     ├── SettlePage (app/groups/[groupId]/settle/page.tsx)
     │   ├── Plan summary ("4 payments instead of 10")
     │   ├── Transfer cards (highlighted when they involve you) → RecordPaymentModal (partial payments, method)
-    └── JoinPage (app/join/[code]/page.tsx): guest onboarding
+    └── JoinPage (app/join/[code]/page.tsx): claim a placeholder or join as new
+    └── WelcomePage (app/welcome): name-only profile on first visit
 ```
 
 ### Add Expense UX decisions
@@ -209,7 +230,7 @@ RootLayout (app/layout.tsx)
 
 ---
 
-## 6. Server-side mutation (production shape)
+## 6. Server-side mutation (simplified; full version in `src/server/actions.ts`)
 
 ```ts
 // app/groups/[groupId]/actions.ts
@@ -242,6 +263,7 @@ Recurring cron (`/api/cron/recurring`, daily): select `recurring_expenses where 
 ---
 
 ## 7. Roadmap
+- Real authentication (passkeys / email magic link) before exposing beyond a home network
 - Offline-first PWA: IndexedDB outbox, replayed with idempotency keys
 - Payment deep links (UPI `upi://pay`, Venmo, PayPal.me) from the settle screen
 - Spending insights by category and person; budget alerts for trips

@@ -59,7 +59,6 @@ export function MemberSplitList({ form }: { form: ExpenseForm }) {
                 <span className="min-w-0">
                   <span className={cx("block truncate text-sm font-medium", !included && "text-zinc-400 line-through")}>
                     {m.name}
-                    {m.isGuest && <span className="ml-1.5 rounded bg-zinc-100 px-1 text-[10px] font-normal text-zinc-500 no-underline dark:bg-zinc-800">guest</span>}
                   </span>
                   <span className="block text-xs text-zinc-500">{included ? "Included" : "Not part of this expense"}</span>
                 </span>

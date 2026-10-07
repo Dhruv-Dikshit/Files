@@ -1,14 +1,13 @@
 "use client";
 
 import { useMemo, useReducer } from "react";
-import { staticRate } from "@/lib/domain/currency";
 import { currencyDecimals, minorToInput, parseMoney, sum } from "@/lib/domain/money";
 import type { Frequency } from "@/lib/domain/recurring";
 import type { ScannedReceipt } from "@/lib/domain/receipts";
 import { computeSplit, validatePayers } from "@/lib/domain/splits";
 import type { Expense, ExpenseCategory, LineItem, Member, MemberId, Minor, Payer, SplitConfig, SplitType } from "@/lib/domain/types";
-import { today, uid } from "@/lib/store/ids";
-import type { ExpenseDraft, Group } from "@/lib/store/types";
+import { today, uid } from "@/lib/ids";
+import type { ExpenseDraft, Group } from "@/lib/types";
 
 /**
  * All form inputs are kept as *strings* (exactly what the user typed) and
@@ -47,6 +46,7 @@ type PerMemberField = "exact" | "percent" | "shares" | "payerAmounts";
 export type ExpenseFormAction =
   | { type: "set"; patch: Partial<ExpenseFormState> }
   | { type: "setCurrency"; currency: string; baseCurrency: string }
+  | { type: "setRate"; currency: string; rate: string }
   | { type: "toggleMember"; memberId: MemberId; order: MemberId[] }
   | { type: "setAllIncluded"; included: MemberId[] }
   | { type: "setPerMember"; field: PerMemberField; memberId: MemberId; value: string }
@@ -63,12 +63,12 @@ function reducer(state: ExpenseFormState, action: ExpenseFormAction): ExpenseFor
       return { ...state, ...action.patch };
 
     case "setCurrency":
-      return {
-        ...state,
-        currency: action.currency,
-        // Pre-fill a suggested rate; the user can override it (custom rate).
-        fxRate: String(staticRate(action.currency, action.baseCurrency)),
-      };
+      // The live rate is fetched by the form after this; until then it's blank.
+      return { ...state, currency: action.currency, fxRate: action.currency === action.baseCurrency ? "1" : "" };
+
+    case "setRate":
+      // Ignore a late response for a currency the user already switched away from.
+      return action.currency === state.currency ? { ...state, fxRate: action.rate } : state;
 
     case "toggleMember": {
       const isIncluded = state.included.includes(action.memberId);
@@ -269,7 +269,6 @@ export function useExpenseForm(group: Group, meId: MemberId, expense?: Expense) 
       fxRate: derived.fxRate,
       payers: derived.payers,
       split: derived.config,
-      owed: derived.split.owed,
       date: state.date,
     };
   }

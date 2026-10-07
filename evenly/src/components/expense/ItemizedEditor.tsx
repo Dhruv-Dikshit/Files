@@ -110,12 +110,13 @@ function Row({ label, value, strong, warn }: { label: string; value: string; str
 }
 
 /**
- * Upload a bill photo → POST /api/receipts/scan → line items. The route uses
- * a mock scanner today; swap in a real OCR provider behind `ReceiptScanner`.
+ * Upload a bill photo → POST /api/receipts/scan (Tesseract OCR on the
+ * server) → line items the user reviews and assigns.
  */
 function ReceiptScanButton({ form }: { form: ExpenseForm }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [status, setStatus] = useState<"idle" | "scanning" | "done" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "scanning" | "done" | "empty" | "error">("idle");
+  const [found, setFound] = useState<{ items: number; totalFound: boolean } | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
   async function onFile(file: File) {
@@ -128,7 +129,12 @@ function ReceiptScanButton({ form }: { form: ExpenseForm }) {
       const res = await fetch("/api/receipts/scan", { method: "POST", body });
       if (!res.ok) throw new Error(await res.text());
       const receipt = (await res.json()) as ScannedReceipt;
+      if (receipt.items.length === 0) {
+        setStatus("empty");
+        return;
+      }
       form.dispatch({ type: "loadReceipt", receipt, included: form.state.included });
+      setFound({ items: receipt.items.length, totalFound: receipt.totalFound });
       setStatus("done");
     } catch {
       setStatus("error");
@@ -145,8 +151,11 @@ function ReceiptScanButton({ form }: { form: ExpenseForm }) {
       <div className="flex-1 text-sm">
         <p className="font-medium">Scan receipt</p>
         <p className="text-xs text-zinc-500">
-          {status === "scanning" && "Reading line items…"}
-          {status === "done" && "Items extracted — review and assign below."}
+          {status === "scanning" && "Reading line items… (first scan takes a few seconds)"}
+          {status === "done" &&
+            found &&
+            `Found ${found.items} items${found.totalFound ? " and the total" : ""} — check them against the bill, then assign.`}
+          {status === "empty" && "No line items recognised. Try a sharper, well-lit photo, or add items manually."}
           {status === "error" && "Couldn't read that receipt. Try again or add items manually."}
           {status === "idle" && "Upload a photo to auto-fill items (OCR)."}
         </p>

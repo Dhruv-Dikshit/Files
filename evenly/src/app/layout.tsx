@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { getCurrentUser } from "@/server/session";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
@@ -15,7 +16,8 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const user = await getCurrentUser();
   return (
     <html lang="en">
       <body>
@@ -26,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-600 text-sm text-white">=</span>
                 Evenly
               </Link>
+              {user && <span className="text-sm text-zinc-500">Hi, {user.displayName}</span>}
             </div>
           </header>
           <main className="mx-auto max-w-2xl px-4 pb-28 pt-4">{children}</main>

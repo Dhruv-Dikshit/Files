@@ -1,11 +1,12 @@
 "use client";
 
+import { useEffect, useState, useTransition } from "react";
 import { convertMinor, COMMON_CURRENCIES } from "@/lib/domain/currency";
 import { formatMoney } from "@/lib/domain/money";
 import type { Expense, ExpenseCategory, SplitType } from "@/lib/domain/types";
 import type { Frequency } from "@/lib/domain/recurring";
-import { addExpense, deleteExpense, updateExpense } from "@/lib/store/store";
-import type { Group } from "@/lib/store/types";
+import type { Group } from "@/lib/types";
+import { deleteExpense, getExchangeRate, saveExpense } from "@/server/actions";
 import { Button, Input, Label, Modal, Segmented, cx } from "@/components/ui/primitives";
 import { ItemizedEditor } from "./ItemizedEditor";
 import { MemberSplitList } from "./MemberSplitList";
@@ -57,20 +58,31 @@ function AddExpenseForm({ group, meId, onClose, expense }: Props) {
   const form = useExpenseForm(group, meId, expense);
   const { state, dispatch } = form;
 
+  const [pending, startTransition] = useTransition();
+  const [serverError, setServerError] = useState<string | null>(null);
+
   function save() {
-    const draft = form.toDraft();
-    if (expense) {
-      updateExpense(expense.id, draft);
-    } else {
-      addExpense(
-        group.id,
-        draft,
-        state.repeat.enabled
-          ? { rule: { frequency: state.repeat.frequency, interval: state.repeat.interval, startDate: draft.date } }
-          : undefined,
-      );
-    }
-    onClose();
+    setServerError(null);
+    startTransition(async () => {
+      const result = await saveExpense({
+        groupId: group.id,
+        draft: form.toDraft(),
+        expenseId: expense?.id,
+        version: expense?.version,
+        repeat: !expense && state.repeat.enabled ? { frequency: state.repeat.frequency, interval: state.repeat.interval } : undefined,
+      });
+      if (result.ok) onClose();
+      else setServerError(result.error);
+    });
+  }
+
+  function remove() {
+    if (!expense || !confirm(`Delete “${expense.description}”? You can restore it from the activity feed.`)) return;
+    startTransition(async () => {
+      const result = await deleteExpense(group.id, expense.id);
+      if (result.ok) onClose();
+      else setServerError(result.error);
+    });
   }
 
   return (
@@ -157,26 +169,18 @@ function AddExpenseForm({ group, meId, onClose, expense }: Props) {
       {/* ── Footer ─────────────────────────────────────────── */}
       <div className="sticky bottom-0 -mx-5 -mb-4 flex items-center gap-2 border-t border-zinc-100 bg-white/95 px-5 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/95">
         {expense && (
-          <Button
-            variant="danger"
-            onClick={() => {
-              if (confirm(`Delete “${expense.description}”? This is recorded in the activity feed.`)) {
-                deleteExpense(expense.id);
-                onClose();
-              }
-            }}
-          >
+          <Button variant="danger" disabled={pending} onClick={remove}>
             Delete
           </Button>
         )}
         <p className="flex-1 truncate text-xs text-orange-600" role="status">
-          {form.total > 0 && form.errors[0]}
+          {serverError ?? (form.total > 0 && form.errors[0])}
         </p>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={!form.isValid}>
-          {expense ? "Save changes" : "Add expense"}
+        <Button type="submit" disabled={!form.isValid || pending}>
+          {pending ? "Saving…" : expense ? "Save changes" : "Add expense"}
         </Button>
       </div>
     </form>
@@ -185,19 +189,55 @@ function AddExpenseForm({ group, meId, onClose, expense }: Props) {
 
 function FxRow({ form, baseCurrency }: { form: ExpenseForm; baseCurrency: string }) {
   const { state, dispatch, total, fxRate } = form;
+  const [status, setStatus] = useState<"loading" | "live" | "manual">("manual");
+  const [rateDate, setRateDate] = useState<string | null>(null);
   const converted = fxRate > 0 ? convertMinor(total, state.currency, baseCurrency, fxRate) : 0;
+
+  // Fetch the live ECB rate whenever the currency changes and no rate is set yet.
+  const currency = state.currency;
+  const needsRate = state.fxRate === "";
+  useEffect(() => {
+    if (!needsRate) return;
+    let cancelled = false;
+    setStatus("loading");
+    getExchangeRate(currency, baseCurrency).then((result) => {
+      if (cancelled) return;
+      if (result.ok && result.data) {
+        dispatch({ type: "setRate", currency, rate: String(result.data.rate) });
+        setRateDate(result.data.date);
+        setStatus("live");
+      } else {
+        setStatus("manual");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currency, baseCurrency, needsRate, dispatch]);
+
   return (
-    <div className="flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-sm dark:bg-amber-950/50">
-      <span className="text-zinc-600 dark:text-zinc-300">1 {state.currency} =</span>
-      <input
-        aria-label="Exchange rate"
-        inputMode="decimal"
-        value={state.fxRate}
-        onChange={(e) => dispatch({ type: "set", patch: { fxRate: e.target.value } })}
-        className="w-24 rounded-lg border border-amber-200 bg-white px-2 py-1 text-right tabular-nums outline-none dark:border-amber-900 dark:bg-zinc-900"
-      />
-      <span className="text-zinc-600 dark:text-zinc-300">{baseCurrency}</span>
-      <span className="ml-auto font-medium tabular-nums">≈ {formatMoney(converted, baseCurrency)}</span>
+    <div className="rounded-xl bg-amber-50 px-3 py-2 text-sm dark:bg-amber-950/50">
+      <div className="flex items-center gap-2">
+        <span className="text-zinc-600 dark:text-zinc-300">1 {state.currency} =</span>
+        <input
+          aria-label="Exchange rate"
+          inputMode="decimal"
+          placeholder={status === "loading" ? "…" : "rate"}
+          value={state.fxRate}
+          onChange={(e) => {
+            setStatus("manual");
+            dispatch({ type: "set", patch: { fxRate: e.target.value } });
+          }}
+          className="w-28 rounded-lg border border-amber-200 bg-white px-2 py-1 text-right tabular-nums outline-none dark:border-amber-900 dark:bg-zinc-900"
+        />
+        <span className="text-zinc-600 dark:text-zinc-300">{baseCurrency}</span>
+        <span className="ml-auto font-medium tabular-nums">≈ {formatMoney(converted, baseCurrency)}</span>
+      </div>
+      <p className="mt-1 text-xs text-zinc-500">
+        {status === "loading" && "Fetching today's rate…"}
+        {status === "live" && `ECB reference rate${rateDate ? ` (${rateDate})` : ""} · edit to use your own`}
+        {status === "manual" && (state.fxRate ? "Custom rate" : "No live rate available — enter the rate you paid")}
+      </p>
     </div>
   );
 }
