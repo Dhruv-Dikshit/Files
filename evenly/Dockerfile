@@ -25,6 +25,7 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 RUN addgroup -S evenly && adduser -S evenly -G evenly
 COPY --from=build --chown=evenly:evenly /app/.next/standalone ./
 COPY --from=build --chown=evenly:evenly /app/.next/static ./.next/static
+COPY --from=build --chown=evenly:evenly /app/public ./public
 USER evenly
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD wget -qO- http://127.0.0.1:3000/welcome >/dev/null || exit 1

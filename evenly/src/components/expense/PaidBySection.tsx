@@ -29,13 +29,11 @@ export function PaidBySection({ form }: { form: ExpenseForm }) {
               aria-pressed={state.payerId === m.id}
               onClick={() => dispatch({ type: "set", patch: { payerId: m.id } })}
               className={cx(
-                "flex items-center gap-2 rounded-full py-1 pl-1 pr-3 text-sm ring-1 transition",
-                state.payerId === m.id
-                  ? "bg-emerald-50 font-semibold text-emerald-800 ring-emerald-500 dark:bg-emerald-950 dark:text-emerald-200"
-                  : "ring-zinc-200 hover:bg-zinc-50 dark:ring-zinc-700 dark:hover:bg-zinc-800",
+                "flex items-center gap-2 rounded-[30px] py-1 pl-1 pr-3 text-[12px] leading-5 transition",
+                state.payerId === m.id ? "bg-accent font-medium text-white" : "bg-surface text-ink hover:bg-cloudy",
               )}
             >
-              <Avatar member={m} size={24} />
+              <Avatar member={m} size={28} />
               {m.name}
             </button>
           ))}
@@ -43,23 +41,23 @@ export function PaidBySection({ form }: { form: ExpenseForm }) {
       ) : (
         <div className="space-y-2">
           {members.map((m) => (
-            <label key={m.id} className="flex items-center gap-3">
-              <Avatar member={m} size={28} />
-              <span className="flex-1 text-sm">{m.name}</span>
+            <label key={m.id} className="flex items-center gap-3 rounded-[20px] bg-surface px-3 py-2">
+              <Avatar member={m} size={32} />
+              <span className="flex-1 text-[14px] font-medium leading-6">{m.name}</span>
               <span className="relative">
                 <input
                   inputMode="decimal"
                   placeholder="0"
                   value={state.payerAmounts[m.id] ?? ""}
                   onChange={(e) => dispatch({ type: "setPerMember", field: "payerAmounts", memberId: m.id, value: e.target.value })}
-                  className="w-32 rounded-lg border border-zinc-200 bg-white py-1.5 pl-2 pr-11 text-right text-sm tabular-nums outline-none focus:border-emerald-500 dark:border-zinc-700 dark:bg-zinc-900"
+                  className="w-32 rounded-[10px] bg-hazy py-1 pl-2 pr-11 text-right text-[14px] leading-6 tabular-nums outline-none focus:ring-2 focus:ring-accent"
                 />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400">{state.currency}</span>
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted">{state.currency}</span>
               </span>
             </label>
           ))}
           {total > 0 && (
-            <p className={cx("text-right text-xs", payersRemaining === 0 ? "text-emerald-600" : "text-orange-600")}>
+            <p className={cx("text-right text-[11px] font-medium leading-5", payersRemaining === 0 ? "text-accent" : "text-danger")}>
               {payersRemaining === 0
                 ? "✓ Payments match the total"
                 : payersRemaining > 0

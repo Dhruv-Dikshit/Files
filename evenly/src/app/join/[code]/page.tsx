@@ -14,7 +14,7 @@ export default async function JoinPage({ params }: { params: Promise<{ code: str
       <Card className="mt-10 py-12 text-center">
         <p className="text-3xl">🔍</p>
         <p className="mt-2 font-medium">Invite code “{code}” not found</p>
-        <p className="text-sm text-zinc-500">Check the code with whoever invited you.</p>
+        <p className="text-[12px] leading-5 text-muted">Check the code with whoever invited you.</p>
       </Card>
     );
   }

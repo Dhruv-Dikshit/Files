@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import type { Group } from "@/lib/types";
 import { joinGroup } from "@/server/actions";
-import { Avatar, Button, Card, Input, Label, cx } from "@/components/ui/primitives";
+import { Avatar, Button, Card, Icon, IconTile, Input, Label, RadioMark, cx } from "@/components/ui/primitives";
 
 /**
  * Join via invite link: pick the placeholder someone already added for you
@@ -25,11 +25,13 @@ export function JoinClient({ group, userName }: { group: Group; userName: string
   return (
     <Card className="mx-auto mt-6 max-w-md space-y-5 p-6">
       <div className="text-center">
-        <p className="text-4xl">{group.emoji}</p>
-        <h1 className="mt-2 text-xl font-semibold">Join “{group.name}”</h1>
-        <div className="mt-3 flex justify-center -space-x-2">
+        <IconTile size={60} tone={0} className="mx-auto text-[28px]">
+          {group.emoji}
+        </IconTile>
+        <h1 className="mt-3 text-[20px] font-bold leading-8">Join “{group.name}”</h1>
+        <div className="mt-3 flex justify-center -space-x-1">
           {group.members.map((m) => (
-            <span key={m.id} className="rounded-full ring-2 ring-white dark:ring-zinc-900">
+            <span key={m.id} className="rounded-full ring-2 ring-surface">
               <Avatar member={m} size={28} />
             </span>
           ))}
@@ -50,18 +52,19 @@ export function JoinClient({ group, userName }: { group: Group; userName: string
       >
         {unclaimed.length > 0 && (
           <fieldset className="space-y-2">
-            <legend className="mb-2 text-sm font-medium">Which one are you?</legend>
+            <legend className="mb-2 text-[14px] font-medium leading-6">Which one are you?</legend>
             {[...unclaimed.map((m) => ({ id: m.id, label: m.name, member: m })), { id: "new", label: "I'm not on this list", member: null }].map((o) => (
               <label
                 key={o.id}
                 className={cx(
-                  "flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2 ring-1 transition",
-                  choice === o.id ? "bg-emerald-50 ring-emerald-500 dark:bg-emerald-950" : "ring-zinc-200 dark:ring-zinc-700",
+                  "flex cursor-pointer items-center gap-3 rounded-[16px] px-3 py-2 ring-1 transition",
+                  choice === o.id ? "bg-cloudy ring-accent" : "bg-hazy ring-transparent",
                 )}
               >
-                <input type="radio" name="who" value={o.id} checked={choice === o.id} onChange={() => setChoice(o.id)} className="accent-emerald-600" />
-                {o.member ? <Avatar member={o.member} size={24} /> : <span className="w-6 text-center">➕</span>}
-                <span className="text-sm">{o.label}</span>
+                <input type="radio" name="who" value={o.id} checked={choice === o.id} onChange={() => setChoice(o.id)} className="sr-only" />
+                <RadioMark checked={choice === o.id} />
+                {o.member ? <Avatar member={o.member} size={32} /> : <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-muted"><Icon name="add-friend" size={16} /></span>}
+                <span className="text-[14px] font-medium leading-6">{o.label}</span>
               </label>
             ))}
           </fieldset>
@@ -74,11 +77,11 @@ export function JoinClient({ group, userName }: { group: Group; userName: string
           </div>
         )}
 
-        {error && <p className="text-sm text-orange-600">{error}</p>}
+        {error && <p className="text-[12px] leading-5 text-danger">{error}</p>}
         <Button type="submit" className="w-full" disabled={!canSubmit || pending}>
           {pending ? "Joining…" : "Join group"}
         </Button>
-        <p className="text-center text-xs text-zinc-500">No password needed — this browser remembers you.</p>
+        <p className="text-center text-[11px] leading-5 text-muted">No password needed — this browser remembers you.</p>
       </form>
     </Card>
   );

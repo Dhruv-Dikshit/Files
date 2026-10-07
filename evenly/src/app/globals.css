@@ -1,12 +1,95 @@
 @import "tailwindcss";
+@import "@fontsource-variable/onest";
+
+/*
+ * Design tokens from the "Split the Bill UI Kit" (Figma › 📌 Components & Styles).
+ * Light values are the kit's Primary/Light palette; dark values use its Dark
+ * palette. Components use the semantic names (bg-surface, text-ink, …) so the
+ * theme switches automatically with the OS setting.
+ */
+@theme {
+  --font-sans: "e-Ukraine", "Onest Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-hazy: var(--hazy);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: #adb0b9; /* Primary/Grey */
+  --color-accent: #996bff; /* Primary/Accent */
+  --color-cloudy: var(--cloudy); /* Primary/Cloudy — soft accent fill */
+  --color-action: #f5db54; /* Primary/Action */
+  --color-hero: var(--hero); /* dark feature cards */
+  --color-btn: var(--btn);
+  --color-btn-ink: var(--btn-ink);
+  /* Not in the kit: needed to distinguish money owed / destructive actions. */
+  --color-danger: #f0616d;
+}
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+  --bg: #f8f8fa; /* Primary/Snow */
+  --surface: #ffffff; /* Primary/White */
+  --hazy: #f3f3f5; /* Primary/Hazy */
+  --line: #f3f3f5;
+  --ink: #19191d; /* Primary/Dark */
+  --cloudy: #f3eeff;
+  --hero: #19191d;
+  --btn: #19191d; /* Button M default */
+  --btn-ink: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #181a1f; /* Dark/002 */
+    --surface: #21242c; /* Dark/004 */
+    --hazy: #2a2e38;
+    --line: #2a2e38;
+    --ink: #ffffff;
+    --cloudy: rgb(153 107 255 / 0.18);
+    --hero: #21242c;
+    --btn: #f5db54; /* dark buttons would vanish on a dark page; use Action */
+    --btn-ink: #19191d;
+  }
+}
+
+/* e-Ukraine is the kit's typeface. It is used when installed on the device;
+   otherwise Onest (bundled, similar proportions) takes over. */
+@font-face {
+  font-family: "e-Ukraine";
+  font-weight: 400;
+  src: local("e-Ukraine Regular"), local("e-Ukraine-Regular");
+}
+@font-face {
+  font-family: "e-Ukraine";
+  font-weight: 500;
+  src: local("e-Ukraine Medium"), local("e-Ukraine-Medium");
+}
+@font-face {
+  font-family: "e-Ukraine";
+  font-weight: 700;
+  src: local("e-Ukraine Bold"), local("e-Ukraine-Bold");
 }
 
 body {
-  @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  @apply bg-bg text-ink antialiased font-sans;
+  font-size: 14px;
+  line-height: 24px;
+}
+
+/* Secondary/* gradient tiles from the kit, used behind category icons. */
+@utility tile-purple {
+  background: radial-gradient(120% 90% at 50% 15%, #f5f0ff 0%, #e2d6ff 100%);
+}
+@utility tile-green {
+  background: radial-gradient(120% 90% at 50% 15%, #f2fff8 0%, #ceebda 100%);
+}
+@utility tile-yellow {
+  background: radial-gradient(120% 90% at 50% 15%, #fffae2 0%, #fff1a9 100%);
+}
+@utility tile-grey {
+  background: radial-gradient(120% 90% at 50% 15%, #f4f4ff 0%, #dcdced 100%);
 }
 
 /* "Save as PDF" uses the browser print pipeline: hide chrome, keep content. */

@@ -16,7 +16,14 @@ type ExpenseRow = Prisma.ExpenseGetPayload<{ include: typeof expenseInclude }>;
 type MemberRow = Prisma.GroupMemberGetPayload<object>;
 type GroupRow = Prisma.GroupGetPayload<{ include: { members: true } }>;
 
-const AVATAR_COLORS = ["#10b981", "#6366f1", "#f59e0b", "#ef4444", "#06b6d4", "#ec4899", "#84cc16", "#8b5cf6"];
+// "Avatar color" gradients from the UI kit (yellow, purple, slate, pink, green).
+const AVATAR_COLORS = [
+  "radial-gradient(110% 110% at 50% 25%, #fff2ac 0%, #f5db54 100%)",
+  "radial-gradient(110% 110% at 50% 25%, #b28dff 0%, #8c55ff 100%)",
+  "radial-gradient(110% 110% at 50% 25%, #babaed 0%, #8787bb 100%)",
+  "radial-gradient(110% 110% at 50% 25%, #e8b6fa 0%, #c076da 100%)",
+  "radial-gradient(110% 110% at 50% 25%, #aee8c6 0%, #71ac8a 100%)",
+];
 
 export const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 export const toDbDate = (iso: string) => new Date(`${iso}T00:00:00.000Z`);

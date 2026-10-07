@@ -88,6 +88,16 @@ If you'd rather use a Postgres you already have, point `DATABASE_URL` in `.env` 
 
 **Needs internet:** only live exchange rates. Without a connection, or for currencies the ECB doesn't publish (such as AED), you type the rate in. Everything else, including OCR, works offline.
 
+## Design
+
+The UI follows the **Split the Bill UI Kit** (Figma › 📌 Components & Styles):
+
+- **Colours:** the kit's palette (Primary/Dark `#19191D`, Grey `#ADB0B9`, Accent `#996BFF`, Action `#F5DB54`, Snow/Hazy/Cloudy surfaces, Dark/002 and Dark/004 for dark mode). They are defined as theme tokens in `src/app/globals.css`, and dark mode follows your device setting. The one colour not in the kit is `danger` (`#F0616D`), used for amounts you owe and for delete actions.
+- **Components:** Button M/S, the pill tab bar, List rows with the purple check radio, Order cards with gradient icon tiles, Counter, Tag, Chart column, gradient avatars and the navigation bar. They live in `src/components/ui/primitives.tsx`.
+- **Icons:** exported unmodified from the kit into `public/icons/`.
+- **Typeface:** e-Ukraine, the kit's font, is used when it's installed on your computer (it's free from the Diia brand book). Otherwise the bundled Onest font takes over, which has similar proportions.
+- **Avatars:** the kit shows memoji faces inside its coloured avatar circles. Here the circles show people's initials instead.
+
 ## Project layout
 
 ```

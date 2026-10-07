@@ -7,7 +7,7 @@ import { COMMON_CURRENCIES } from "@/lib/domain/currency";
 import { formatMoney } from "@/lib/domain/money";
 import type { Group } from "@/lib/types";
 import { createGroup } from "@/server/actions";
-import { Amount, Avatar, Button, Card, Input, Label, Modal } from "@/components/ui/primitives";
+import { Amount, AvatarStack, Button, Card, Icon, IconTile, Input, Label, Modal, selectClass } from "@/components/ui/primitives";
 
 export interface DashboardRow {
   group: Group;
@@ -33,65 +33,68 @@ export function DashboardClient({ rows, userName }: { rows: DashboardRow[]; user
 
   return (
     <div className="space-y-6">
-      {rows.length > 0 && (
-        <section className="grid grid-cols-2 gap-3">
-          {[...totals.entries()].map(([cur, t]) => (
-            <div key={cur} className="contents">
-              <Card>
-                <p className="text-xs uppercase tracking-wide text-zinc-500">You are owed</p>
-                <p className="text-2xl font-semibold tabular-nums text-emerald-600">{formatMoney(t.owed, cur)}</p>
-              </Card>
-              <Card>
-                <p className="text-xs uppercase tracking-wide text-zinc-500">You owe</p>
-                <p className="text-2xl font-semibold tabular-nums text-orange-600">{formatMoney(t.owe, cur)}</p>
-              </Card>
+      {rows.length > 0 &&
+        [...totals.entries()].map(([cur, t]) => (
+          <section key={cur} className="rounded-[28px] bg-hero p-5 text-white">
+            <p className="text-[12px] leading-5 text-muted">Your balance · {cur}</p>
+            <p className="mt-1 text-[28px] font-medium leading-10 tabular-nums">{formatMoney(t.owed - t.owe, cur)}</p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="rounded-[16px] bg-white/[0.07] px-4 py-3">
+                <p className="text-[11px] leading-4 text-muted">You are owed</p>
+                <p className="text-[17px] font-bold leading-6 tabular-nums text-action">{formatMoney(t.owed, cur)}</p>
+              </div>
+              <div className="rounded-[16px] bg-white/[0.07] px-4 py-3">
+                <p className="text-[11px] leading-4 text-muted">You owe</p>
+                <p className="text-[17px] font-bold leading-6 tabular-nums">{formatMoney(t.owe, cur)}</p>
+              </div>
             </div>
-          ))}
-        </section>
-      )}
+          </section>
+        ))}
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Your groups</h1>
-          <Button onClick={() => setCreating(true)}>+ New group</Button>
+          <h1 className="text-[20px] font-bold leading-8">Your groups</h1>
+          <Button className="px-4 py-2" onClick={() => setCreating(true)}>
+            + New group
+          </Button>
         </div>
 
         {rows.length === 0 ? (
-          <Card className="py-12 text-center">
-            <p className="text-4xl">👋</p>
-            <p className="mt-2 font-medium">Welcome, {userName}!</p>
-            <p className="mx-auto mt-1 max-w-sm text-sm text-zinc-500">
+          <Card className="px-6 py-10 text-center">
+            <IconTile size={60} tone={0} className="mx-auto">
+              <Icon name="add-friend" />
+            </IconTile>
+            <p className="mt-4 text-[17px] font-bold leading-6">Welcome, {userName}!</p>
+            <p className="mx-auto mt-1 max-w-sm text-[12px] leading-5 text-muted">
               Create a group for a trip, your flat or a dinner — or join one with an invite code from a friend.
             </p>
-            <Button className="mt-4" onClick={() => setCreating(true)}>
+            <Button className="mt-5 w-full max-w-[250px]" onClick={() => setCreating(true)}>
               Create your first group
             </Button>
           </Card>
         ) : (
           <ul className="space-y-2">
-            {rows.map(({ group, balance, expenseCount }) => (
+            {rows.map(({ group, balance, expenseCount }, i) => (
               <li key={group.id}>
-                <Link
-                  href={`/groups/${group.id}`}
-                  className="flex items-center gap-4 rounded-2xl bg-white p-4 ring-1 ring-zinc-200/70 transition hover:ring-emerald-400 dark:bg-zinc-900 dark:ring-zinc-800"
-                >
-                  <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-2xl dark:bg-zinc-800">{group.emoji}</span>
+                {/* Kit "Order card" */}
+                <Link href={`/groups/${group.id}`} className="flex items-center gap-[19px] rounded-[20px] bg-surface px-3 py-2.5 transition hover:ring-2 hover:ring-cloudy">
+                  <IconTile size={60} tone={i} className="text-[26px]">
+                    {group.emoji}
+                  </IconTile>
                   <span className="min-w-0 flex-1">
-                    <span className="block font-medium">{group.name}</span>
-                    <span className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
-                      <span className="flex -space-x-1.5">
-                        {group.members.slice(0, 5).map((m) => (
-                          <span key={m.id} className="rounded-full ring-2 ring-white dark:ring-zinc-900">
-                            <Avatar member={m} size={18} />
-                          </span>
-                        ))}
-                      </span>
-                      {group.members.length} {group.members.length === 1 ? "person" : "people"} · {expenseCount} {expenseCount === 1 ? "expense" : "expenses"}
+                    <span className="block truncate text-[14px] font-bold leading-6">{group.name}</span>
+                    <span className="flex items-center gap-2 text-[11px] leading-6 text-muted">
+                      <AvatarStack members={group.members} />
+                      {group.members.length} {group.members.length === 1 ? "person" : "persons"} · {expenseCount} {expenseCount === 1 ? "expense" : "expenses"}
                     </span>
                   </span>
-                  <span className="text-right text-xs">
-                    <span className="block text-zinc-500">{balance === 0 ? "all settled" : balance > 0 ? "you get back" : "you owe"}</span>
-                    {balance !== 0 && <Amount value={balance}>{formatMoney(Math.abs(balance), group.baseCurrency)}</Amount>}
+                  <span className="text-right">
+                    {balance === 0 ? (
+                      <span className="block text-[14px] leading-6 text-muted">settled</span>
+                    ) : (
+                      <Amount value={balance}>{formatMoney(Math.abs(balance), group.baseCurrency)}</Amount>
+                    )}
+                    <span className="block text-[11px] leading-6 text-muted">{balance === 0 ? "all square" : balance > 0 ? "you get back" : "you owe"}</span>
                   </span>
                 </Link>
               </li>
@@ -112,7 +115,7 @@ export function DashboardClient({ rows, userName }: { rows: DashboardRow[]; user
             <Label htmlFor="code">Have an invite code?</Label>
             <Input id="code" placeholder="ABC-12345" value={code} onChange={(e) => setCode(e.target.value)} />
           </div>
-          <Button type="submit" variant="secondary" disabled={!code.trim()}>
+          <Button type="submit" variant="action" disabled={!code.trim()}>
             Join
           </Button>
         </form>
@@ -149,7 +152,7 @@ function CreateGroupModal({ open, onClose, onCreated }: { open: boolean; onClose
         <div className="flex gap-2">
           <div className="w-20">
             <Label htmlFor="emoji">Icon</Label>
-            <Input id="emoji" value={emoji} maxLength={4} onChange={(e) => setEmoji(e.target.value)} className="text-center text-xl" />
+            <Input id="emoji" value={emoji} maxLength={4} onChange={(e) => setEmoji(e.target.value)} className="text-center text-[20px]" />
           </div>
           <div className="flex-1">
             <Label htmlFor="gname">Group name</Label>
@@ -162,20 +165,20 @@ function CreateGroupModal({ open, onClose, onCreated }: { open: boolean; onClose
             id="gcur"
             value={currency}
             onChange={(e) => setCurrency(e.target.value)}
-            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            className={selectClass}
           >
             {COMMON_CURRENCIES.map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>
-          <p className="mt-1 text-xs text-zinc-500">Balances are shown in this currency. Individual expenses can use any currency.</p>
+          <p className="mt-1 text-[11px] leading-4 text-muted">Balances are shown in this currency. Individual expenses can use any currency.</p>
         </div>
         <div>
           <Label htmlFor="gmembers">Add people (comma separated)</Label>
           <Input id="gmembers" placeholder="Alice, Bob, Chen" value={members} onChange={(e) => setMembers(e.target.value)} />
-          <p className="mt-1 text-xs text-zinc-500">They don&apos;t need to sign up — you can track their share right away and send them the invite link later.</p>
+          <p className="mt-1 text-[11px] leading-4 text-muted">They don&apos;t need to sign up — you can track their share right away and send them the invite link later.</p>
         </div>
-        {error && <p className="text-sm text-orange-600">{error}</p>}
+        {error && <p className="text-[12px] leading-5 text-danger">{error}</p>}
         <Button type="submit" className="w-full" disabled={!name.trim() || pending}>
           {pending ? "Creating…" : "Create group"}
         </Button>

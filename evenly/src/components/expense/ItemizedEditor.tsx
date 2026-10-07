@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { formatMoney } from "@/lib/domain/money";
 import type { ScannedReceipt } from "@/lib/domain/receipts";
-import { Avatar, Button, cx } from "@/components/ui/primitives";
+import { Avatar, Button, Icon, cx } from "@/components/ui/primitives";
 import type { ExpenseForm } from "./useExpenseForm";
 
 /**
@@ -20,21 +20,21 @@ export function ItemizedEditor({ form }: { form: ExpenseForm }) {
       <ReceiptScanButton form={form} />
 
       {state.items.length === 0 && (
-        <p className="rounded-2xl border border-dashed border-zinc-300 p-4 text-center text-sm text-zinc-500 dark:border-zinc-700">
+        <p className="rounded-[20px] border border-dashed border-muted/50 p-4 text-center text-[12px] leading-5 text-muted">
           Scan a receipt or add items manually, then tap people to assign each item.
         </p>
       )}
 
       <ul className="space-y-2">
         {state.items.map((item) => (
-          <li key={item.id} className="rounded-2xl p-3 ring-1 ring-zinc-200 dark:ring-zinc-800">
+          <li key={item.id} className="rounded-[20px] bg-surface p-3">
             <div className="flex gap-2">
               <input
                 aria-label="Item name"
                 placeholder="Item name"
                 value={item.label}
                 onChange={(e) => dispatch({ type: "updateItem", id: item.id, patch: { label: e.target.value } })}
-                className="min-w-0 flex-1 bg-transparent text-sm font-medium outline-none"
+                className="min-w-0 flex-1 bg-transparent text-[14px] font-medium leading-6 outline-none placeholder:text-muted"
               />
               <input
                 aria-label="Item amount"
@@ -42,10 +42,10 @@ export function ItemizedEditor({ form }: { form: ExpenseForm }) {
                 placeholder="0.00"
                 value={item.amount}
                 onChange={(e) => dispatch({ type: "updateItem", id: item.id, patch: { amount: e.target.value } })}
-                className="w-24 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-right text-sm tabular-nums outline-none focus:border-emerald-500 dark:border-zinc-700 dark:bg-zinc-900"
+                className="w-24 rounded-[10px] bg-hazy px-2 py-1 text-right text-[14px] leading-6 tabular-nums outline-none focus:ring-2 focus:ring-accent"
               />
-              <button type="button" aria-label="Remove item" onClick={() => dispatch({ type: "removeItem", id: item.id })} className="px-1 text-zinc-400 hover:text-red-500">
-                ✕
+              <button type="button" aria-label="Remove item" onClick={() => dispatch({ type: "removeItem", id: item.id })} className="px-1 text-muted hover:text-danger">
+                <Icon name="delete" size={16} />
               </button>
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -58,8 +58,8 @@ export function ItemizedEditor({ form }: { form: ExpenseForm }) {
                     aria-pressed={on}
                     onClick={() => dispatch({ type: "toggleItemAssignee", id: item.id, memberId: m.id })}
                     className={cx(
-                      "flex items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-xs ring-1 transition",
-                      on ? "bg-emerald-50 text-emerald-800 ring-emerald-400 dark:bg-emerald-950 dark:text-emerald-200" : "text-zinc-400 ring-zinc-200 dark:ring-zinc-700",
+                      "flex items-center gap-1.5 rounded-[30px] py-0.5 pl-0.5 pr-2.5 text-[11px] leading-5 transition",
+                      on ? "bg-accent text-white" : "bg-hazy text-muted",
                     )}
                   >
                     <Avatar member={m} size={18} dimmed={!on} />
@@ -77,7 +77,7 @@ export function ItemizedEditor({ form }: { form: ExpenseForm }) {
       </Button>
 
       {state.items.length > 0 && (
-        <dl className="space-y-1 rounded-2xl bg-zinc-50 p-3 text-sm dark:bg-zinc-950">
+        <dl className="space-y-1 rounded-[20px] bg-surface p-4 text-[12px] leading-6">
           <Row label="Items" value={formatMoney(itemsTotal, state.currency)} />
           <Row
             label={itemsExtra >= 0 ? "Tax / tip / service (shared proportionally)" : "Items exceed the total"}
@@ -86,7 +86,7 @@ export function ItemizedEditor({ form }: { form: ExpenseForm }) {
           />
           <Row label="Bill total" value={formatMoney(total, state.currency)} strong />
           {Object.keys(split.owed).length > 0 && (
-            <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+            <div className="mt-2 border-t border-line pt-2">
               {members
                 .filter((m) => split.owed[m.id] !== undefined)
                 .map((m) => (
@@ -102,8 +102,8 @@ export function ItemizedEditor({ form }: { form: ExpenseForm }) {
 
 function Row({ label, value, strong, warn }: { label: string; value: string; strong?: boolean; warn?: boolean }) {
   return (
-    <div className={cx("flex justify-between gap-4", strong && "font-semibold", warn && "text-orange-600")}>
-      <dt className="text-zinc-500">{label}</dt>
+    <div className={cx("flex justify-between gap-4", strong && "text-[14px] font-bold", warn && "text-danger")}>
+      <dt className={strong ? "" : "text-muted"}>{label}</dt>
       <dd className="tabular-nums">{value}</dd>
     </div>
   );
@@ -142,23 +142,28 @@ function ReceiptScanButton({ form }: { form: ExpenseForm }) {
   }
 
   return (
-    <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 p-3 dark:from-emerald-950 dark:to-teal-950">
-      {preview ? (
-        <img src={preview} alt="Receipt preview" className="h-12 w-12 rounded-lg object-cover" />
-      ) : (
-        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white text-2xl dark:bg-zinc-900">🧾</span>
-      )}
-      <div className="flex-1 text-sm">
-        <p className="font-medium">Scan receipt</p>
-        <p className="text-xs text-zinc-500">
-          {status === "scanning" && "Reading line items… (first scan takes a few seconds)"}
-          {status === "done" &&
-            found &&
-            `Found ${found.items} items${found.totalFound ? " and the total" : ""} — check them against the bill, then assign.`}
-          {status === "empty" && "No line items recognised. Try a sharper, well-lit photo, or add items manually."}
-          {status === "error" && "Couldn't read that receipt. Try again or add items manually."}
-          {status === "idle" && "Upload a photo to auto-fill items (OCR)."}
-        </p>
+    // Kit "List" row ("Open camera") + Button M ("Open camera or upload bill")
+    <div className="space-y-3 rounded-[20px] bg-surface p-3">
+      <div className="flex items-center gap-4">
+        {preview ? (
+          <img src={preview} alt="Receipt preview" className="h-[52px] w-[52px] rounded-[16px] object-cover" />
+        ) : (
+          <span className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-[16px] bg-cloudy text-accent">
+            <Icon name="camera" size={16} />
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-medium leading-6">Scan receipt</p>
+          <p className="text-[11px] leading-4 text-muted">
+            {status === "scanning" && "Reading line items… (first scan takes a few seconds)"}
+            {status === "done" &&
+              found &&
+              `Found ${found.items} items${found.totalFound ? " and the total" : ""} — check them against the bill, then assign.`}
+            {status === "empty" && "No line items recognised. Try a sharper, well-lit photo, or add items manually."}
+            {status === "error" && "Couldn't read that receipt. Try again or add items manually."}
+            {status === "idle" && "Fill in items automatically from a photo."}
+          </p>
+        </div>
       </div>
       <input
         ref={inputRef}
@@ -168,8 +173,8 @@ function ReceiptScanButton({ form }: { form: ExpenseForm }) {
         className="hidden"
         onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
       />
-      <Button variant="secondary" disabled={status === "scanning"} onClick={() => inputRef.current?.click()}>
-        {status === "scanning" ? "Scanning…" : "Upload"}
+      <Button className="w-full" disabled={status === "scanning"} onClick={() => inputRef.current?.click()}>
+        {status === "scanning" ? "Scanning…" : "Open camera or upload bill"}
       </Button>
     </div>
   );

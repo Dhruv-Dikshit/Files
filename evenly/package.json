@@ -18,6 +18,7 @@
     "setup": "docker compose up -d db && prisma migrate deploy"
   },
   "dependencies": {
+    "@fontsource-variable/onest": "^5.3.1",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@tesseract.js-data/eng": "^1.0.0",
