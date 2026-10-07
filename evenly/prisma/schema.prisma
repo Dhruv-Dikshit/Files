@@ -1,0 +1,296 @@
+// Evenly — PostgreSQL schema (Prisma 7).
+//
+// Conventions
+//  * Money is BIGINT minor units (paise/cents/yen) + an ISO-4217 currency.
+//  * fx_rate is frozen per expense/settlement so history never re-prices.
+//  * Expenses/settlements are soft-deleted (deleted_at) so the activity feed
+//    can show and restore them; balance queries filter deleted_at IS NULL.
+//  * A GroupMember is the unit of membership AND of debt. user_id is
+//    nullable: guests and "placeholder" people (e.g. Grandma, who will never
+//    sign up) are members without accounts and can be claimed later.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum SplitType {
+  EQUAL
+  EXACT
+  PERCENT
+  SHARES
+  ITEMIZED
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE // left / deactivated: kept for history, hidden from new expenses
+}
+
+enum Frequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum ActivityAction {
+  GROUP_CREATED
+  GROUP_UPDATED
+  MEMBER_JOINED
+  MEMBER_REMOVED
+  MEMBER_DEACTIVATED
+  EXPENSE_CREATED
+  EXPENSE_UPDATED
+  EXPENSE_DELETED
+  EXPENSE_RESTORED
+  SETTLEMENT_CREATED
+  SETTLEMENT_DELETED
+  RECURRING_POSTED
+}
+
+model User {
+  id              String   @id @default(uuid()) @db.Uuid
+  email           String?  @unique
+  displayName     String   @map("display_name")
+  avatarUrl       String?  @map("avatar_url")
+  defaultCurrency String   @default("INR") @map("default_currency") @db.Char(3)
+  /// true for anonymous auth sessions (guest mode) until they upgrade
+  isAnonymous     Boolean  @default(false) @map("is_anonymous")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  memberships GroupMember[]
+  groups      Group[]       @relation("GroupCreator")
+
+  @@map("users")
+}
+
+model Group {
+  id           String    @id @default(uuid()) @db.Uuid
+  name         String
+  emoji        String?
+  baseCurrency String    @default("INR") @map("base_currency") @db.Char(3)
+  /// Short human-friendly code for "join with code" (e.g. GOA-7K3P)
+  inviteCode   String    @unique @map("invite_code")
+  /// Lets anyone with the link view/add as a guest without an account
+  guestAccess  Boolean   @default(true) @map("guest_access")
+  simplifyDebts Boolean  @default(true) @map("simplify_debts")
+  createdById  String    @map("created_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at")
+  archivedAt   DateTime? @map("archived_at")
+
+  createdBy   User               @relation("GroupCreator", fields: [createdById], references: [id])
+  members     GroupMember[]
+  expenses    Expense[]
+  settlements Settlement[]
+  recurring   RecurringExpense[]
+  activity    ActivityLog[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id          String       @id @default(uuid()) @db.Uuid
+  groupId     String       @map("group_id") @db.Uuid
+  userId      String?      @map("user_id") @db.Uuid
+  displayName String       @map("display_name")
+  role        MemberRole   @default(MEMBER)
+  status      MemberStatus @default(ACTIVE)
+  isGuest     Boolean      @default(false) @map("is_guest")
+  /// One-time token letting a guest/placeholder be claimed by a real account
+  claimToken  String?      @unique @map("claim_token")
+  joinedAt    DateTime     @default(now()) @map("joined_at")
+
+  group           Group                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user            User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  payments        ExpensePayer[]
+  splits          ExpenseSplit[]
+  itemAssignments ExpenseItemAssignee[]
+  settlementsOut  Settlement[]          @relation("SettlementFrom")
+  settlementsIn   Settlement[]          @relation("SettlementTo")
+  activity        ActivityLog[]
+
+  @@unique([groupId, userId])
+  @@index([groupId, status])
+  @@map("group_members")
+}
+
+model Expense {
+  id          String    @id @default(uuid()) @db.Uuid
+  groupId     String    @map("group_id") @db.Uuid
+  description String
+  category    String    @default("other")
+  amount      BigInt // minor units of `currency`
+  currency    String    @db.Char(3)
+  /// 1 unit of `currency` = fx_rate units of group.base_currency
+  fxRate      Decimal   @default(1) @map("fx_rate") @db.Decimal(18, 8)
+  splitType   SplitType @map("split_type")
+  date        DateTime  @db.Date
+  notes       String?
+  receiptUrl  String?   @map("receipt_url")
+  recurringId String?   @map("recurring_id") @db.Uuid
+  createdById String    @map("created_by") @db.Uuid // group_members.id
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+  /// Optimistic concurrency: clients send the version they edited
+  version     Int       @default(1)
+
+  group     Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  recurring RecurringExpense? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  payers    ExpensePayer[]
+  splits    ExpenseSplit[]
+  items     ExpenseItem[]
+
+  /// idempotent recurring posting: one expense per template per date
+  @@unique([recurringId, date])
+  @@index([groupId, deletedAt, date])
+  @@map("expenses")
+}
+
+/// Who paid, supports multiple payers. SUM(amount) = expense.amount.
+model ExpensePayer {
+  expenseId String @map("expense_id") @db.Uuid
+  memberId  String @map("member_id") @db.Uuid
+  amount    BigInt
+
+  expense Expense     @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  member  GroupMember @relation(fields: [memberId], references: [id])
+
+  @@id([expenseId, memberId])
+  @@map("expense_payers")
+}
+
+/// Resolved owed amount per *included* member. Excluded members have no row.
+/// SUM(owed_amount) = expense.amount. `input_value` keeps what the user typed
+/// (percent / shares / exact) so the edit form can be re-hydrated.
+model ExpenseSplit {
+  expenseId  String   @map("expense_id") @db.Uuid
+  memberId   String   @map("member_id") @db.Uuid
+  owedAmount BigInt   @map("owed_amount")
+  inputValue Decimal? @map("input_value") @db.Decimal(18, 6)
+
+  expense Expense     @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  member  GroupMember @relation(fields: [memberId], references: [id])
+
+  @@id([expenseId, memberId])
+  @@index([memberId])
+  @@map("expense_splits")
+}
+
+/// Receipt line items for ITEMIZED splits (manual or OCR-extracted).
+model ExpenseItem {
+  id        String  @id @default(uuid()) @db.Uuid
+  expenseId String  @map("expense_id") @db.Uuid
+  label     String
+  amount    BigInt
+  position  Int
+  fromOcr   Boolean @default(false) @map("from_ocr")
+
+  expense   Expense               @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  assignees ExpenseItemAssignee[]
+
+  @@map("expense_items")
+}
+
+model ExpenseItemAssignee {
+  itemId   String @map("item_id") @db.Uuid
+  memberId String @map("member_id") @db.Uuid
+
+  item   ExpenseItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  member GroupMember @relation(fields: [memberId], references: [id])
+
+  @@id([itemId, memberId])
+  @@map("expense_item_assignees")
+}
+
+model Settlement {
+  id          String    @id @default(uuid()) @db.Uuid
+  groupId     String    @map("group_id") @db.Uuid
+  fromId      String    @map("from_member_id") @db.Uuid
+  toId        String    @map("to_member_id") @db.Uuid
+  amount      BigInt
+  currency    String    @db.Char(3)
+  fxRate      Decimal   @default(1) @map("fx_rate") @db.Decimal(18, 8)
+  method      String? // cash | upi | bank | venmo | ...
+  note        String?
+  date        DateTime  @db.Date
+  createdById String    @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  group Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  from  GroupMember @relation("SettlementFrom", fields: [fromId], references: [id])
+  to    GroupMember @relation("SettlementTo", fields: [toId], references: [id])
+
+  @@index([groupId, deletedAt])
+  @@map("settlements")
+}
+
+/// Template for auto-posting expenses (rent, Wi-Fi, Netflix).
+/// `payload` stores the full expense draft (payers + split config) as JSON,
+/// validated by the same zod/TS schema as the Add Expense form.
+model RecurringExpense {
+  id           String    @id @default(uuid()) @db.Uuid
+  groupId      String    @map("group_id") @db.Uuid
+  description  String
+  payload      Json
+  frequency    Frequency
+  interval     Int       @default(1)
+  startDate    DateTime  @map("start_date") @db.Date
+  endDate      DateTime? @map("end_date") @db.Date
+  lastPostedOn DateTime? @map("last_posted_on") @db.Date
+  nextRunOn    DateTime  @map("next_run_on") @db.Date
+  active       Boolean   @default(true)
+  createdById  String    @map("created_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  group    Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@index([active, nextRunOn])
+  @@map("recurring_expenses")
+}
+
+/// Append-only audit trail. `diff` holds {before, after} snapshots so every
+/// edit is attributable and reversible. Written in the same transaction as
+/// the mutation it describes.
+model ActivityLog {
+  id         String         @id @default(uuid()) @db.Uuid
+  groupId    String         @map("group_id") @db.Uuid
+  actorId    String?        @map("actor_member_id") @db.Uuid
+  action     ActivityAction
+  entityType String         @map("entity_type") // expense | settlement | member | group
+  entityId   String         @map("entity_id") @db.Uuid
+  summary    String
+  diff       Json?
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  group Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actor GroupMember? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([groupId, createdAt(sort: Desc)])
+  @@map("activity_log")
+}
+
+/// Daily reference-rate cache (filled by a cron from Frankfurter/OXR).
+model ExchangeRate {
+  base   String   @db.Char(3)
+  quote  String   @db.Char(3)
+  date   DateTime @db.Date
+  rate   Decimal  @db.Decimal(18, 8)
+  source String   @default("ecb")
+
+  @@id([base, quote, date])
+  @@map("exchange_rates")
+}
