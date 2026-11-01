@@ -25,10 +25,12 @@
   <section class="font-bar panel">
     <label for="font">font:</label>
     <select id="font"></select>
-    <label class="btn small ghost" title="Use your own handwriting font (.ttf / .otf / .woff)">
-      + upload
+    <button class="btn small light" id="openBuilder" title="Draw each letter (e.g. in Procreate) and upload the PNGs">✏️ build my font</button>
+    <label class="btn small ghost" title="Use an existing .ttf / .otf / .woff font file">
+      + .ttf
       <input id="fontUpload" type="file" accept=".ttf,.otf,.woff,.woff2" hidden />
     </label>
+    <button class="btn small ghost" id="editFont" hidden>edit</button>
   </section>
 
   <main class="stage" id="stage">
@@ -42,17 +44,17 @@
       <div class="panel ctrl">
         <span class="lbl">size</span>
         <input type="range" id="size" min="24" max="320" value="128" />
-        <output for="size" class="val" id="sizeVal">128</output>
+        <output class="val" id="sizeVal">128</output>
       </div>
       <div class="panel ctrl">
         <span class="lbl">spacing</span>
         <input type="range" id="spacing" min="-20" max="60" value="0" />
-        <output for="spacing" class="val" id="spacingVal">0</output>
+        <output class="val" id="spacingVal">0</output>
       </div>
       <div class="panel ctrl">
         <span class="lbl">line height</span>
         <input type="range" id="lineHeight" min="0.6" max="2.4" step="0.05" value="1.1" />
-        <output for="lineHeight" class="val" id="lineHeightVal">1.1</output>
+        <output class="val" id="lineHeightVal">1.1</output>
       </div>
     </div>
 
@@ -112,58 +114,174 @@
       </div>
       <div class="panel ctrl">
         <span class="lbl">boil</span>
-        <div class="seg" data-key="boil">
+        <div class="seg" data-key="boil" title="Drawings per second — 12 = animating 'on twos' at 24fps">
           <button data-v="0">off</button>
           <button data-v="6">slow</button>
-          <button data-v="10" class="on">med</button>
-          <button data-v="16">fast</button>
+          <button data-v="8" class="on">med</button>
+          <button data-v="12">fast</button>
         </div>
+        <button class="btn small light" id="reseed" title="New random hand-drawn variation">🎲</button>
       </div>
     </div>
 
+    <h2 class="section-title">export for your editor</h2>
+
     <div class="row">
       <div class="panel ctrl">
-        <span class="lbl">background</span>
-        <div class="seg" data-key="bgMode">
-          <button data-v="transparent" class="on">transparent</button>
-          <button data-v="solid">solid</button>
+        <span class="lbl">frame</span>
+        <div class="seg" data-key="frame">
+          <button data-v="fit" class="on">fit text</button>
+          <button data-v="1080p">1080p</button>
+          <button data-v="4k">4k</button>
+          <button data-v="vertical">9:16</button>
+          <button data-v="square">1:1</button>
         </div>
-        <input type="color" id="bgColor" value="#ffffff" />
       </div>
       <div class="panel ctrl">
-        <span class="lbl">export</span>
-        <div class="seg" data-key="scale">
+        <span class="lbl">fps</span>
+        <div class="seg" data-key="fps">
+          <button data-v="24" class="on">24</button>
+          <button data-v="25">25</button>
+          <button data-v="30">30</button>
+          <button data-v="60">60</button>
+        </div>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">length</span>
+        <input type="range" id="seconds" min="1" max="20" step="1" value="5" />
+        <output class="val" id="secondsVal">5</output>
+      </div>
+    </div>
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">detail</span>
+        <div class="seg" data-key="scale" title="Render resolution of the lettering (fit-text frame size depends on this)">
           <button data-v="1">1x</button>
           <button data-v="2" class="on">2x</button>
           <button data-v="4">4x</button>
         </div>
-        <div class="seg" data-key="videoFormat">
-          <button data-v="webm" class="on">webm</button>
-          <button data-v="mp4">mp4</button>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">preview bg</span>
+        <div class="seg" data-key="bgMode">
+          <button data-v="transparent" class="on">none</button>
+          <button data-v="black">black</button>
+          <button data-v="white">white</button>
+          <button data-v="solid">custom</button>
         </div>
+        <input type="color" id="bgColor" value="#ffffff" />
       </div>
     </div>
 
+    <div class="export-grid">
+      <button class="export-card" data-export="png-seq">
+        <b>PNG sequence</b><span>real transparency · .zip</span>
+        <em>Premiere · AE · Resolve — just drop it on top</em>
+      </button>
+      <button class="export-card dark" data-export="mp4-black">
+        <b>MP4 · black</b><span>blend mode: <u>Screen</u> / Add</span>
+        <em>light-coloured text · works everywhere incl. Final Cut</em>
+      </button>
+      <button class="export-card light" data-export="mp4-white">
+        <b>MP4 · white</b><span>blend mode: <u>Multiply</u></span>
+        <em>dark-coloured text · like ink on paper</em>
+      </button>
+      <button class="export-card green" data-export="mp4-green">
+        <b>MP4 · green</b><span>Ultra Key / Keylight</span>
+        <em>any colour except green</em>
+      </button>
+      <button class="export-card" data-export="webm">
+        <b>WebM · alpha</b><span>transparent video</span>
+        <em>Resolve & AE (not Premiere) · Chrome only</em>
+      </button>
+      <button class="export-card" data-export="png">
+        <b>PNG still</b><span>transparent · ⌘S</span>
+        <em>thumbnails, Figma, Keynote</em>
+      </button>
+    </div>
+    <div class="progress" id="progress" hidden><div></div><span></span></div>
+
+    <details class="blend-help">
+      <summary>Where's the blend mode setting?</summary>
+      <ul>
+        <li><b>Premiere Pro</b>: select the clip → Effect Controls → Opacity → <i>Blend Mode</i></li>
+        <li><b>After Effects</b>: Timeline → toggle <i>Modes</i> (F4) → Mode column</li>
+        <li><b>DaVinci Resolve</b>: Edit page → Inspector → Video → Composite → <i>Composite Mode</i></li>
+        <li><b>Final Cut Pro</b>: Inspector → Compositing → <i>Blend Mode</i></li>
+      </ul>
+      <p><b>Screen</b> drops out black, <b>Multiply</b> drops out white. Put the clip on the track above your footage.</p>
+    </details>
+
     <div class="row actions">
-      <button class="btn" id="exportPng">save png</button>
-      <button class="btn" id="exportVideo">save video</button>
-      <button class="btn" id="copyPng">copy png</button>
-      <button class="btn ghost" id="exportSvg" title="Static SVG with the PNG embedded — handy for Figma / Keynote">save svg</button>
-      <button class="btn ghost" id="reseed" title="New random hand-drawn variation">🎲 reshuffle</button>
-      <button class="btn ghost" id="share">copy link</button>
+      <button class="btn ghost" id="copyPng">copy png</button>
+      <button class="btn ghost" id="share">copy style link</button>
     </div>
 
     <div class="row presets">
       <div class="panel ctrl wide">
         <span class="lbl">presets</span>
         <div id="presetList" class="preset-list"></div>
-        <button class="btn small" id="savePreset">+ save current</button>
+        <button class="btn small light" id="savePreset">+ save current</button>
       </div>
     </div>
   </section>
 
+  <!-- ============ font builder ============ -->
+  <dialog id="builder" class="builder">
+    <div class="b-head">
+      <input id="bName" class="b-name" value="Ila Signature" aria-label="Font name" />
+      <span class="b-count" id="bCount">0 / 94</span>
+      <button class="b-close" id="bClose" aria-label="Close">×</button>
+    </div>
+
+    <div class="b-tools">
+      <button class="btn small" id="bShift" aria-pressed="false">⇧ shift</button>
+      <label class="btn small">
+        bulk upload PNGs
+        <input id="bBulk" type="file" accept="image/png,image/*" multiple hidden />
+      </label>
+      <button class="btn small ghost" id="bTemplate">⬇ Procreate template</button>
+      <label class="btn small ghost">
+        import pack
+        <input id="bImport" type="file" accept=".scribblefont,.json,application/json" hidden />
+      </label>
+      <button class="btn small ghost" id="bExport">⬇ export pack</button>
+    </div>
+
+    <p class="b-help">
+      Tap a key to upload its PNG (pick several to give that letter <b>alternate drawings</b>). You can also drag PNGs onto keys,
+      or select a key and press <kbd>⌘V</kbd> to paste a letter copied from Procreate. For bulk upload, name the files after the
+      letter: <code>a.png</code>, <code>upper_a.png</code>, <code>a-2.png</code> (2nd drawing), <code>question.png</code>.
+    </p>
+
+    <div class="kb" id="kb"></div>
+    <input id="bKeyFile" type="file" accept="image/png,image/*" multiple hidden />
+
+    <div class="b-settings">
+      <label>baseline <input type="range" id="bBaseline" min="0.5" max="0.95" step="0.01" /></label>
+      <label>letter size <input type="range" id="bScale" min="0.5" max="1.8" step="0.02" /></label>
+      <label>letter gap <input type="range" id="bGap" min="-0.2" max="0.4" step="0.01" /></label>
+      <label class="chk"><input type="checkbox" id="bKeep" /> keep my drawn colours</label>
+      <label class="chk"><input type="checkbox" id="bCycle" /> boil swaps alternate drawings</label>
+    </div>
+
+    <div class="b-test">
+      <input id="bSample" value="Hello Ila 123!" aria-label="Test text" />
+      <canvas id="bPreview"></canvas>
+    </div>
+
+    <div class="b-foot">
+      <button class="btn small danger" id="bDelete">delete font</button>
+      <span class="spacer"></span>
+      <button class="btn" id="bUse">use this font</button>
+    </div>
+  </dialog>
+
   <div id="toast" role="status" aria-live="polite"></div>
 
+  <script src="vendor/mp4-muxer.js"></script>
+  <script src="glyphfonts.js"></script>
+  <script src="exporter.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

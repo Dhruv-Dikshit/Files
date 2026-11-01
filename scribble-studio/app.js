@@ -1,11 +1,12 @@
 /* Scribble Studio — hand-drawn animated text generator.
  *
  * Pipeline for every frame:
- *   1. layout + draw each glyph with a tiny random transform ("wobble")
- *   2. adjust stroke thickness (dilate with a stroke / erode with destination-out)
+ *   1. layout + draw each glyph with a tiny random transform ("wobble").
+ *      Glyphs are either font text, or your own PNG drawings (see glyphfonts.js).
+ *   2. adjust stroke thickness (dilate / erode)
  *   3. displace pixels with seeded value-noise ("roughness")  -> marker-like edges
  *   4. optional crayon grain
- * Several frames are generated with different seeds and cycled at N fps
+ * Several frames are generated with different seeds and cycled at N drawings/sec
  * to create the classic hand-drawn "line boil" animation.
  */
 (() => {
@@ -16,9 +17,11 @@
     "Shadows Into Light", "Gaegu", "Patrick Hand", "Nanum Pen Script",
     "Reenie Beanie", "Covered By Your Grace", "Schoolbell", "Kalam",
   ];
-  const SWATCHES = ["#3b4fd8", "#111111", "#e5484d", "#f5a524", "#12a150", "#ffffff"];
+  const FALLBACK_FONT = "Gochi Hand"; // used for characters your drawn font doesn't have yet
+  const SWATCHES = ["#3b4fd8", "#111111", "#ffffff", "#e5484d", "#f5a524", "#12a150"];
   const BOIL_FRAMES = 4;
   const THICKNESS = { thin: -0.016, regular: 0, bold: 0.022, heavy: 0.042 };
+  const BG = { transparent: null, black: "#000000", white: "#ffffff" };
 
   const DEFAULTS = {
     text: "filmkid",
@@ -34,11 +37,13 @@
     align: "center",
     roughness: 3,
     wobble: 2,
-    boil: 10,
+    boil: 8,
     bgMode: "transparent",
     bgColor: "#ffffff",
     scale: 2,
-    videoFormat: "webm",
+    frame: "fit",
+    fps: 24,
+    seconds: 5,
     seed: 1,
   };
 
@@ -46,6 +51,7 @@
   const $ = (id) => document.getElementById(id);
   const preview = $("preview");
   const pctx = preview.getContext("2d");
+  const GF = window.GlyphFonts;
 
   // ---------- seeded randomness & noise ----------
   function mulberry32(a) {
@@ -61,10 +67,10 @@
     let n = Math.imul(i, 374761393) ^ Math.imul(j, 668265263) ^ Math.imul(seed, 982451653);
     n = Math.imul(n ^ (n >>> 13), 1274126177);
     n ^= n >>> 16;
-    return (n >>> 0) / 4294967295;
+    return (n >>> 0) / 4294967296;
   }
 
-  /** Builds a lookup grid of random values; sampling it bilinearly gives smooth value-noise. */
+  /** Grid of random values; sampling it with smooth interpolation gives value-noise. */
   function noiseGrid(w, h, cell, seed) {
     const gw = Math.ceil(w / cell) + 2;
     const gh = Math.ceil(h / cell) + 2;
@@ -86,129 +92,182 @@
     return a + (b - a) * ty;
   }
 
-  // ---------- layout ----------
-  function fontString(px) {
-    return `${px}px "${state.font}"`;
+  // ---------- fonts ----------
+  const glyphId = (font) => (font.startsWith("glyph:") ? font.slice(6) : null);
+  const fontString = (family, px) => `${px}px "${family}"`;
+
+  async function ensureFont(S = state) {
+    const fam = glyphId(S.font) ? FALLBACK_FONT : S.font;
+    try { await document.fonts.load(fontString(fam, S.size), S.text || "a"); } catch (_) { /* ignore */ }
   }
 
-  function layout(ctx, px) {
-    ctx.font = fontString(px);
-    const lines = state.text.replace(/\r/g, "").split("\n");
-    const spacing = (state.spacing / 100) * px;
-    const laid = lines.map((line) => {
+  // ---------- layout ----------
+  /**
+   * Returns lines of { chars, items: [{ x (left), adv, kind, … }], width } in pixels.
+   * Text fonts use prefix widths so the font's kerning is kept.
+   */
+  function layout(S, px, measure) {
+    const lines = S.text.replace(/\r/g, "").split("\n");
+    const spacing = (S.spacing / 100) * px;
+    const gid = glyphId(S.font);
+    const gfont = gid && GF.get(gid);
+
+    return lines.map((line) => {
       const chars = [...line];
-      const xs = [];
-      let prefix = "";
-      for (let k = 0; k < chars.length; k++) {
-        // using prefix widths keeps the font's kerning
-        xs.push(ctx.measureText(prefix).width + k * spacing);
-        prefix += chars[k];
+      const items = [];
+      if (!gfont) {
+        measure.font = fontString(gid ? FALLBACK_FONT : S.font, px);
+        let prefix = "";
+        chars.forEach((ch, k) => {
+          const x = measure.measureText(prefix).width + k * spacing;
+          prefix += ch;
+          items.push({ x, adv: measure.measureText(ch).width, kind: "text", font: measure.font });
+        });
+        const width = chars.length ? measure.measureText(line).width + (chars.length - 1) * spacing : 0;
+        return { chars, items, width };
       }
-      const width = chars.length ? ctx.measureText(line).width + (chars.length - 1) * spacing : 0;
-      return { chars, xs, width };
+      const rec = gfont.rec;
+      const imgH = px * 1.25 * rec.scale;
+      let x = 0;
+      chars.forEach((ch) => {
+        let item;
+        const variants = ch === " " ? null : GF.lookup(gid, ch);
+        if (ch === " ") item = { adv: px * 0.3 * rec.scale, kind: "space" };
+        else if (variants) {
+          const maxW = Math.max(...variants.map((v) => (v.w * imgH) / v.h));
+          item = { adv: maxW + rec.gap * px, kind: "img", variants, imgH, rec };
+        } else {
+          measure.font = fontString(FALLBACK_FONT, px);
+          item = { adv: measure.measureText(ch).width + rec.gap * px, kind: "text", font: measure.font };
+        }
+        item.x = x;
+        items.push(item);
+        x += item.adv + spacing;
+      });
+      return { chars, items, width: Math.max(0, x - spacing) };
     });
-    const maxW = Math.max(1, ...laid.map((l) => l.width));
-    return { laid, maxW };
   }
 
   // ---------- rendering ----------
-  /** Renders one frame at a given pixel scale and returns a canvas. */
-  function renderFrame(scale, frameSeed) {
-    const px = state.size * scale;
+  /** Renders one frame at a pixel scale. `over` temporarily overrides state (used by the font builder). */
+  function renderFrame(scale, frameSeed, over) {
+    const S = over ? { ...state, ...over } : state;
+    const px = S.size * scale;
     const measure = document.createElement("canvas").getContext("2d");
-    const { laid, maxW } = layout(measure, px);
+    const laid = layout(S, px, measure);
+    const maxW = Math.max(1, ...laid.map((l) => l.width));
 
-    const rough = state.roughness;
-    const lineH = px * state.lineHeight;
-    const shadowOff = state.style === "shadow" ? state.shadowOffset * scale : 0;
-    const pad = Math.ceil(px * 0.45 + rough * px * 0.02 + shadowOff + Math.abs(THICKNESS[state.thickness]) * px);
+    const rough = S.roughness;
+    const lineH = px * S.lineHeight;
+    const shadowOff = S.style === "shadow" ? S.shadowOffset * scale : 0;
+    const thick = THICKNESS[S.thickness] * px;
+    const pad = Math.ceil(px * 0.45 + rough * px * 0.02 + shadowOff + Math.abs(thick) * 2);
     const W = Math.ceil(maxW + pad * 2 + shadowOff);
     const H = Math.ceil(lineH * (laid.length - 1) + px * 1.25 + pad * 2 + shadowOff);
 
     const c = document.createElement("canvas");
     c.width = W; c.height = H;
     const ctx = c.getContext("2d");
-    ctx.font = fontString(px);
     ctx.textBaseline = "alphabetic";
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
 
-    const rand = mulberry32(state.seed * 7919 + frameSeed * 104729);
-    const wob = state.wobble;
-    const thick = THICKNESS[state.thickness] * px;
-    const outline = state.style === "outline";
+    const rand = mulberry32(S.seed * 7919 + frameSeed * 104729);
+    const wob = S.wobble;
+    const outline = S.style === "outline";
     const outlineW = Math.max(1.5 * scale, px * 0.03 + Math.max(0, thick));
 
-    // Pick each glyph's position + jitter once, so every pass (shadow, ink, erosion) lines up.
+    // Decide each glyph's position, jitter and drawing once, so every pass lines up.
     const glyphs = [];
+    let gi = 0;
     laid.forEach((line, li) => {
       let x0 = pad;
-      if (state.align === "center") x0 = pad + (maxW - line.width) / 2;
-      else if (state.align === "right") x0 = pad + (maxW - line.width);
+      if (S.align === "center") x0 = pad + (maxW - line.width) / 2;
+      else if (S.align === "right") x0 = pad + (maxW - line.width);
       const baseY = pad + px * 0.95 + li * lineH;
-      line.chars.forEach((ch, k) => {
-        if (ch === " ") return;
-        const w = measure.measureText(ch).width;
-        glyphs.push({
-          ch, w,
-          x: x0 + line.xs[k] + w / 2 + (rand() * 2 - 1) * wob * px * 0.004,
+      let prev = null;
+      line.items.forEach((it, k) => {
+        const ch = line.chars[k];
+        if (it.kind === "space" || ch === " ") { prev = null; return; }
+        const g = {
+          ch, it,
+          x: x0 + it.x + it.adv / 2 + (rand() * 2 - 1) * wob * px * 0.004,
           y: baseY + (rand() * 2 - 1) * wob * px * 0.008,
           rot: (rand() * 2 - 1) * wob * 0.035, // radians
           sc: 1 + (rand() * 2 - 1) * wob * 0.012,
-        });
+        };
+        if (it.kind === "img") {
+          const n = it.variants.length;
+          const cycle = it.rec.cycle ? frameSeed : 0;
+          g.vi = Math.min(n - 1, Math.floor(hash2(gi, cycle, S.seed) * n));
+          // never repeat the same drawing for doubled letters ("ll", "ss")
+          if (prev && prev.ch === ch && prev.vi === g.vi && n > 1) g.vi = (g.vi + 1) % n;
+        }
+        glyphs.push(g);
+        prev = g;
+        gi++;
       });
     });
 
-    const eachGlyph = (dx, dy, fn) => {
-      for (const g of glyphs) {
-        ctx.save();
-        ctx.translate(g.x + dx, g.y + dy);
-        ctx.rotate(g.rot);
-        ctx.scale(g.sc, g.sc);
-        fn(g.ch, -g.w / 2);
-        ctx.restore();
-      }
+    const place = (g, dx, dy, fn) => {
+      ctx.save();
+      ctx.translate(g.x + dx, g.y + dy);
+      ctx.rotate(g.rot);
+      ctx.scale(g.sc, g.sc);
+      fn();
+      ctx.restore();
     };
 
-    const drawGlyphs = (color, dx, dy) => {
+    const drawLayer = (color, off, isShadow) => {
       ctx.fillStyle = color;
       ctx.strokeStyle = color;
-      eachGlyph(dx, dy, (ch, x) => {
-        if (outline) {
-          ctx.lineWidth = outlineW;
-          ctx.strokeText(ch, x, 0);
-        } else {
-          if (thick > 0) { ctx.lineWidth = thick * 2; ctx.strokeText(ch, x, 0); }
-          ctx.fillText(ch, x, 0);
-        }
-      });
-    };
-
-    const layers = state.style === "shadow" ? [[state.shadowColor, shadowOff], [state.color, 0]] : [[state.color, 0]];
-    for (const [color, off] of layers) {
-      drawGlyphs(color, off, off);
-      // thin: erode this layer's edges before the next layer goes on top
+      for (const g of glyphs) {
+        place(g, off, off, () => {
+          if (g.it.kind === "img") {
+            const v = g.it.variants[g.vi];
+            const imgH = g.it.imgH;
+            const r = GF.render(v, imgH, {
+              color, thick, outline, outlineW: outlineW * 0.6,
+              keepColors: g.it.rec.keepColors, forceTint: isShadow,
+            });
+            const vw = (v.w * imgH) / v.h;
+            ctx.drawImage(r.canvas, -vw / 2 - r.pad, -imgH * g.it.rec.baseline - r.pad);
+            return;
+          }
+          ctx.font = g.it.font;
+          const x = -g.it.adv / 2;
+          if (outline) { ctx.lineWidth = outlineW; ctx.strokeText(g.ch, x, 0); return; }
+          if (thick > 0) { ctx.lineWidth = thick * 2; ctx.strokeText(g.ch, x, 0); }
+          ctx.fillText(g.ch, x, 0);
+        });
+      }
+      // thin: erode text glyph edges (drawn glyphs are eroded inside GlyphFonts.render)
       if (thick < 0 && !outline) {
         ctx.save();
         ctx.globalCompositeOperation = "destination-out";
         ctx.lineWidth = -thick * 2;
         ctx.strokeStyle = "#000";
-        eachGlyph(off, off, (ch, x) => ctx.strokeText(ch, x, 0));
+        for (const g of glyphs) {
+          if (g.it.kind !== "text") continue;
+          place(g, off, off, () => { ctx.font = g.it.font; ctx.strokeText(g.ch, -g.it.adv / 2, 0); });
+        }
         ctx.restore();
       }
-    }
+    };
 
-    if (rough > 0) displace(ctx, W, H, px, rough, frameSeed);
-    if (state.style === "crayon") crayon(ctx, W, H, px, frameSeed);
+    if (S.style === "shadow") drawLayer(S.shadowColor, shadowOff, true);
+    drawLayer(S.color, 0, false);
+
+    if (rough > 0) displace(ctx, W, H, px, rough, S.seed * 31 + frameSeed * 1013);
+    if (S.style === "crayon") crayon(ctx, W, H, px, S.seed * 17 + frameSeed * 7);
     return c;
   }
 
   /** Marker-edge effect: shifts each pixel by two octaves of smooth noise. */
-  function displace(ctx, W, H, px, rough, frameSeed) {
+  function displace(ctx, W, H, px, rough, seed) {
     const src = ctx.getImageData(0, 0, W, H);
     const out = ctx.createImageData(W, H);
     const s = src.data, o = out.data;
-    const seed = state.seed * 31 + frameSeed * 1013;
     const lowCell = Math.max(6, px * 0.22);
     const hiCell = Math.max(2, px * 0.035);
     const lowAmp = rough * px * 0.0045;
@@ -232,10 +291,9 @@
   }
 
   /** Crayon / pencil grain: knocks holes in the alpha channel with streaky noise. */
-  function crayon(ctx, W, H, px, frameSeed) {
+  function crayon(ctx, W, H, px, seed) {
     const img = ctx.getImageData(0, 0, W, H);
     const d = img.data;
-    const seed = state.seed * 17 + frameSeed * 7;
     const SX = 0.5, SY = 1.6; // stretch the noise so the grain streaks like wax on paper
     const streak = noiseGrid(W * SX, H * SY, Math.max(2, px * 0.02), seed + 9);
     for (let y = 0; y < H; y++) {
@@ -251,13 +309,10 @@
     ctx.putImageData(img, 0, 0);
   }
 
-  // ---------- frame cache & animation ----------
+  // ---------- preview: frame cache & animation ----------
   let previewFrames = [];
   let renderToken = 0;
-
-  async function ensureFont() {
-    try { await document.fonts.load(fontString(state.size), state.text || "a"); } catch (_) { /* ignore */ }
-  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
 
   async function rebuild() {
     const token = ++renderToken;
@@ -268,8 +323,7 @@
     const frames = [];
     for (let f = 0; f < count; f++) {
       frames.push(renderFrame(dpr, f));
-      // yield so slider dragging stays responsive
-      await new Promise((r) => setTimeout(r, 0));
+      await tick(); // keep slider dragging responsive
       if (token !== renderToken) return;
     }
     previewFrames = frames;
@@ -280,6 +334,8 @@
     drawPreview(performance.now(), true);
   }
 
+  const bgFor = (mode) => (mode === "solid" ? state.bgColor : BG[mode] ?? null);
+
   let lastIdx = -1;
   function drawPreview(t, force) {
     if (!previewFrames.length) return;
@@ -287,10 +343,8 @@
     if (idx === lastIdx && !force) return;
     lastIdx = idx;
     pctx.clearRect(0, 0, preview.width, preview.height);
-    if (state.bgMode === "solid") {
-      pctx.fillStyle = state.bgColor;
-      pctx.fillRect(0, 0, preview.width, preview.height);
-    }
+    const bg = bgFor(state.bgMode);
+    if (bg) { pctx.fillStyle = bg; pctx.fillRect(0, 0, preview.width, preview.height); }
     pctx.drawImage(previewFrames[idx], 0, 0);
   }
 
@@ -307,10 +361,9 @@
   }
 
   // ---------- export ----------
-  function filename(ext) {
-    const slug = (state.text.trim().split("\n")[0] || "scribble")
+  function slug() {
+    return (state.text.trim().split("\n")[0] || "scribble")
       .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "scribble";
-    return `${slug}-scribble.${ext}`;
   }
 
   function download(blob, name) {
@@ -320,114 +373,83 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
 
-  async function exportCanvas() {
+  async function exportDrawings() {
     await ensureFont();
-    const frame = renderFrame(state.scale, 0);
-    if (state.bgMode !== "solid") return frame;
-    const c = document.createElement("canvas");
-    c.width = frame.width; c.height = frame.height;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = state.bgColor;
-    ctx.fillRect(0, 0, c.width, c.height);
-    ctx.drawImage(frame, 0, 0);
-    return c;
+    const count = state.boil > 0 ? BOIL_FRAMES : 1;
+    const out = [];
+    for (let f = 0; f < count; f++) { out.push(renderFrame(state.scale, f)); await tick(); }
+    return out;
   }
 
   const toBlob = (c, type = "image/png") => new Promise((r) => c.toBlob(r, type));
 
-  async function exportPng() {
-    const c = await exportCanvas();
-    download(await toBlob(c), filename("png"));
-    toast(`Saved ${c.width}×${c.height} PNG`);
+  function luminance(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+      v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  }
+
+  function progress(p, label) {
+    const box = $("progress");
+    if (p == null) { box.hidden = true; return; }
+    box.hidden = false;
+    box.firstElementChild.style.width = Math.round(p * 100) + "%";
+    box.lastElementChild.textContent = label || Math.round(p * 100) + "%";
+  }
+
+  const busy = (on) => document.querySelectorAll(".export-card").forEach((b) => (b.disabled = on));
+
+  async function runExport(kind) {
+    const E = window.Exporter;
+    const opts = { fps: state.fps, boil: state.boil, seconds: state.seconds, base: slug() };
+    const lum = luminance(state.color);
+    const gid = glyphId(state.font);
+    const keeps = gid && GF.get(gid) && GF.get(gid).rec.keepColors;
+    busy(true);
+    progress(0, "drawing frames…");
+    try {
+      const drawings = await exportDrawings();
+      let res;
+      if (kind === "png") {
+        const [c] = E.compose(drawings.slice(0, 1), state.frame, bgFor(state.bgMode));
+        res = { blob: await toBlob(c), ext: "png" };
+      } else if (kind === "png-seq") {
+        res = await E.pngSequence(E.compose(drawings, state.frame, null), { ...opts, onProgress: (p) => progress(p, "packing PNGs…") });
+      } else if (kind === "webm") {
+        progress(0.5, "recording in real time…");
+        res = await E.webm(E.compose(drawings, state.frame, null), opts);
+      } else {
+        const bg = { "mp4-black": "#000000", "mp4-white": "#ffffff", "mp4-green": "#00b140" }[kind];
+        if (!keeps && kind === "mp4-black" && lum < 0.18) toast("Heads up: dark text vanishes with Screen. Pick a light colour, or use MP4 · white.");
+        if (!keeps && kind === "mp4-white" && lum > 0.7) toast("Heads up: light text vanishes with Multiply. Pick a dark colour, or use MP4 · black.");
+        res = await E.mp4(E.compose(drawings, state.frame, bg), { ...opts, onProgress: (p) => progress(p, "encoding MP4…") });
+      }
+      const suffix = { png: "", "png-seq": "-alpha-seq", webm: "-alpha", "mp4-black": "-screen", "mp4-white": "-multiply", "mp4-green": "-greenscreen" }[kind];
+      download(res.blob, `${opts.base}${suffix}.${res.ext}`);
+      const mb = (res.blob.size / 1048576).toFixed(1);
+      toast(`Saved ${res.ext.toUpperCase()} (${mb} MB)` + (kind === "mp4-black" ? " → blend mode Screen" : kind === "mp4-white" ? " → blend mode Multiply" : ""));
+    } catch (e) {
+      console.error(e);
+      toast("Export failed: " + e.message);
+    } finally {
+      busy(false);
+      progress(null);
+    }
   }
 
   async function copyPng() {
     try {
-      const c = await exportCanvas();
-      const blob = await toBlob(c);
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      const drawings = await exportDrawings();
+      const [c] = window.Exporter.compose(drawings.slice(0, 1), "fit", bgFor(state.bgMode));
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": toBlob(c) })]);
       toast("PNG copied — paste it into Figma, Keynote, Premiere…");
     } catch (e) {
-      toast("Clipboard not available in this browser — use save png instead");
-    }
-  }
-
-  async function exportSvg() {
-    const c = await exportCanvas();
-    const url = c.toDataURL("image/png");
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${c.width}" height="${c.height}" viewBox="0 0 ${c.width} ${c.height}"><image href="${url}" width="${c.width}" height="${c.height}"/></svg>`;
-    download(new Blob([svg], { type: "image/svg+xml" }), filename("svg"));
-    toast("Saved SVG");
-  }
-
-  function pickMime(format) {
-    const options = format === "mp4"
-      ? ["video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=avc1", "video/mp4"]
-      : ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"];
-    return options.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
-  }
-
-  async function exportVideo() {
-    if (!window.MediaRecorder) return toast("Video recording isn't supported in this browser");
-    let format = state.videoFormat;
-    let mime = pickMime(format);
-    if (!mime) {
-      format = format === "mp4" ? "webm" : "mp4";
-      mime = pickMime(format);
-      if (!mime) return toast("No supported video codec found");
-      toast(`${state.videoFormat.toUpperCase()} not supported here — saving ${format.toUpperCase()}`);
-    }
-    const btn = $("exportVideo");
-    btn.disabled = true;
-    btn.textContent = "rendering…";
-    try {
-      await ensureFont();
-      const fps = state.boil > 0 ? state.boil : 10;
-      const count = state.boil > 0 ? BOIL_FRAMES : 1;
-      const frames = [];
-      for (let f = 0; f < count; f++) {
-        frames.push(renderFrame(state.scale, f));
-        await new Promise((r) => setTimeout(r, 0));
-      }
-      const c = document.createElement("canvas");
-      // H.264 needs even dimensions
-      c.width = frames[0].width + (frames[0].width % 2);
-      c.height = frames[0].height + (frames[0].height % 2);
-      const ctx = c.getContext("2d");
-      // MP4 has no alpha channel, so fall back to the background colour (white by default)
-      const solid = state.bgMode === "solid" || format === "mp4";
-      const paint = (i) => {
-        ctx.clearRect(0, 0, c.width, c.height);
-        if (solid) { ctx.fillStyle = state.bgColor; ctx.fillRect(0, 0, c.width, c.height); }
-        ctx.drawImage(frames[i % frames.length], 0, 0);
-      };
-      paint(0);
-      const stream = c.captureStream(fps);
-      const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
-      const chunks = [];
-      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-      const done = new Promise((r) => (rec.onstop = r));
-      rec.start();
-      const durationMs = 4000;
-      const total = Math.round((durationMs / 1000) * fps);
-      btn.textContent = "recording…";
-      for (let i = 0; i < total; i++) {
-        paint(i);
-        await new Promise((r) => setTimeout(r, 1000 / fps));
-      }
-      rec.stop();
-      await done;
-      download(new Blob(chunks, { type: mime.split(";")[0] }), filename(format));
-      toast(`Saved ${format.toUpperCase()}${format === "webm" && !solid ? " with transparency" : ""}`);
-    } catch (e) {
-      console.error(e);
-      toast("Video export failed: " + e.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "save video";
+      toast("Clipboard not available in this browser — use PNG still instead");
     }
   }
 
@@ -440,30 +462,30 @@
     try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (_) { /* private mode */ }
   }
 
-  function loadInitial() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORE) || "null");
-      if (saved) Object.assign(state, pick(saved));
-    } catch (_) { /* ignore */ }
-    if (location.hash.length > 1) {
-      try {
-        const fromHash = JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(1)))));
-        Object.assign(state, pick(fromHash));
-      } catch (_) { /* bad link */ }
-    }
-    if (!FONTS.includes(state.font)) state.font = DEFAULTS.font; // uploaded fonts don't survive reloads
-  }
-
   function pick(obj) {
     const out = {};
-    for (const k of SHAREABLE) if (k in obj && typeof obj[k] === typeof DEFAULTS[k]) out[k] = obj[k];
+    for (const k of SHAREABLE) if (obj && k in obj && typeof obj[k] === typeof DEFAULTS[k]) out[k] = obj[k];
     return out;
+  }
+
+  function loadInitial() {
+    try { Object.assign(state, pick(JSON.parse(localStorage.getItem(STORE) || "null"))); } catch (_) { /* ignore */ }
+    if (location.hash.length > 1) {
+      try { Object.assign(state, pick(JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(1))))))); } catch (_) { /* bad link */ }
+    }
+    if (![0, 6, 8, 12].includes(state.boil)) state.boil = 8;
+    if (!(state.bgMode in BG) && state.bgMode !== "solid") state.bgMode = "transparent";
+  }
+
+  function validateFont() {
+    const known = new Set([...FONTS, ...GF.list().map((f) => (f.kind === "ttf" ? f.name : "glyph:" + f.id))]);
+    if (!known.has(state.font)) state.font = DEFAULTS.font;
   }
 
   async function shareLink() {
     const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
     const url = `${location.origin}${location.pathname}#${encoded}`;
-    try { await navigator.clipboard.writeText(url); toast("Link copied — anyone opening it gets this exact style"); }
+    try { await navigator.clipboard.writeText(url); toast("Style link copied (drawn fonts stay on this device)"); }
     catch (_) { history.replaceState(null, "", "#" + encoded); toast("Link is in the address bar"); }
   }
 
@@ -487,41 +509,59 @@
       b.className = "chip";
       b.innerHTML = `<span></span><span class="x" title="Delete">×</span>`;
       b.firstChild.textContent = p.name;
-      b.style.fontFamily = `"${p.state.font}"`;
+      if (!glyphId(p.state.font || "")) b.style.fontFamily = `"${p.state.font}"`;
       b.onclick = (e) => {
         if (e.target.classList.contains("x")) {
           const l = getPresets(); l.splice(i, 1); setPresets(l); return;
         }
-        const keepText = state.text;
-        Object.assign(state, pick(p.state), { text: keepText });
+        Object.assign(state, pick(p.state), { text: state.text });
+        validateFont();
         syncUI(); schedule();
       };
       box.appendChild(b);
     });
   }
 
-  // ---------- UI wiring ----------
+  // ---------- UI ----------
   function toast(msg) {
     const t = $("toast");
     t.textContent = msg;
     t.classList.add("show");
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+    toast._t = setTimeout(() => t.classList.remove("show"), 3200);
   }
 
-  function addFontOption(name) {
-    const o = document.createElement("option");
-    o.value = name; o.textContent = name; o.style.fontFamily = `"${name}"`;
-    $("font").appendChild(o);
+  function refreshFontOptions() {
+    const sel = $("font");
+    sel.innerHTML = "";
+    const group = (label, items) => {
+      if (!items.length) return;
+      const g = document.createElement("optgroup");
+      g.label = label;
+      items.forEach(([value, name, family]) => {
+        const o = document.createElement("option");
+        o.value = value; o.textContent = name;
+        if (family) o.style.fontFamily = `"${family}"`;
+        g.appendChild(o);
+      });
+      sel.appendChild(g);
+    };
+    const mine = GF.list();
+    group("✏️ my drawn fonts", mine.filter((f) => f.kind === "glyph").map((f) => ["glyph:" + f.id, f.name]));
+    group("uploaded", mine.filter((f) => f.kind === "ttf").map((f) => [f.name, f.name, f.name]));
+    group("built-in", FONTS.map((f) => [f, f, f]));
+    sel.value = state.font;
   }
 
-  const sliders = ["size", "spacing", "lineHeight", "roughness", "wobble"];
+  const sliders = ["size", "spacing", "lineHeight", "roughness", "wobble", "seconds"];
 
   function syncUI() {
+    const gid = glyphId(state.font);
     $("font").value = state.font;
-    $("font").style.fontFamily = `"${state.font}"`;
+    $("font").style.fontFamily = gid ? "" : `"${state.font}"`;
+    $("editFont").hidden = !gid;
     $("text").value = state.text;
-    $("text").style.fontFamily = `"${state.font}", var(--ui-font)`;
+    $("text").style.fontFamily = gid ? "" : `"${state.font}", var(--ui-font)`;
     sliders.forEach((k) => { $(k).value = state[k]; $(k + "Val").textContent = state[k]; });
     $("color").value = state.color;
     $("colorHex").value = state.color.toUpperCase();
@@ -536,41 +576,36 @@
   }
 
   function wire() {
-    FONTS.forEach(addFontOption);
     $("font").onchange = (e) => { state.font = e.target.value; syncUI(); schedule(); };
 
     $("fontUpload").onchange = async (e) => {
       const file = e.target.files[0];
+      e.target.value = "";
       if (!file) return;
       try {
-        const name = file.name.replace(/\.[^.]+$/, "");
-        const face = new FontFace(name, await file.arrayBuffer());
-        await face.load();
-        document.fonts.add(face);
-        if (![...$("font").options].some((o) => o.value === name)) addFontOption(name);
-        state.font = name;
-        syncUI(); schedule();
-        toast(`Loaded "${name}" — it stays on your device`);
+        const rec = await GF.addTtf(file);
+        state.font = rec.name;
+        refreshFontOptions(); syncUI(); schedule();
+        toast(`Loaded "${rec.name}" — saved on this device`);
       } catch (err) {
         toast("Couldn't read that font file");
       }
-      e.target.value = "";
     };
 
     $("text").addEventListener("input", (e) => { state.text = e.target.value; schedule(); });
     $("text").addEventListener("keydown", (e) => {
-      // plain Enter keeps a single line feel; Shift+Enter inserts a newline (textarea default)
-      if (e.key === "Enter" && !e.shiftKey) e.preventDefault();
+      if (e.key === "Enter" && !e.shiftKey) e.preventDefault(); // Shift+Enter = new line
     });
 
     sliders.forEach((k) => {
       $(k).addEventListener("input", (e) => {
         state[k] = parseFloat(e.target.value);
         $(k + "Val").textContent = state[k];
-        schedule();
+        if (k === "seconds") persist(); else schedule();
       });
     });
 
+    const exportOnly = new Set(["scale", "frame", "fps"]);
     document.querySelectorAll(".seg").forEach((seg) => {
       seg.addEventListener("click", (e) => {
         const b = e.target.closest("button");
@@ -579,8 +614,9 @@
         const v = b.dataset.v;
         state[key] = typeof DEFAULTS[key] === "number" ? parseFloat(v) : v;
         syncUI();
-        if (key !== "videoFormat" && key !== "scale") schedule(); else persist();
-        if (key === "bgMode") drawPreview(performance.now(), true);
+        if (exportOnly.has(key)) persist();
+        else if (key === "bgMode") { persist(); drawPreview(performance.now(), true); }
+        else schedule();
       });
     });
 
@@ -602,19 +638,18 @@
     $("shadowOffset").addEventListener("input", (e) => { state.shadowOffset = parseFloat(e.target.value); schedule(); });
     $("bgColor").addEventListener("input", (e) => {
       state.bgColor = e.target.value;
-      if (state.bgMode !== "solid") { state.bgMode = "solid"; syncUI(); }
-      persist();
+      state.bgMode = "solid";
+      syncUI(); persist();
       drawPreview(performance.now(), true);
     });
 
-    $("exportPng").onclick = exportPng;
-    $("exportVideo").onclick = exportVideo;
+    document.querySelectorAll("[data-export]").forEach((b) => (b.onclick = () => runExport(b.dataset.export)));
     $("copyPng").onclick = copyPng;
-    $("exportSvg").onclick = exportSvg;
     $("reseed").onclick = () => { state.seed = (Math.random() * 1e6) | 0; schedule(); };
     $("share").onclick = shareLink;
     $("savePreset").onclick = () => {
-      const name = prompt("Name this look:", `${state.font} ${state.style}`);
+      const label = $("font").selectedOptions[0] ? $("font").selectedOptions[0].textContent : state.font;
+      const name = prompt("Name this look:", `${label} ${state.style}`);
       if (!name) return;
       const list = getPresets();
       list.push({ name: name.slice(0, 40), state: { ...state } });
@@ -622,19 +657,294 @@
     };
 
     window.addEventListener("keydown", (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); exportPng(); }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); runExport("png"); }
     });
-    window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener?.("change", schedule);
+
+    $("openBuilder").onclick = () => Builder.open(glyphId(state.font));
+    $("editFont").onclick = () => Builder.open(glyphId(state.font));
   }
 
+  // ---------- font builder (keyboard of PNG letters) ----------
+  const Builder = (() => {
+    const ROWS = [
+      ["`1234567890-=", "~!@#$%^&*()_+"],
+      ["qwertyuiop[]\\", "QWERTYUIOP{}|"],
+      ["asdfghjkl;'", "ASDFGHJKL:\""],
+      ["zxcvbnm,./", "ZXCVBNM<>?"],
+    ];
+    const ALL = ROWS.flatMap((r) => [...r[0], ...r[1]]);
+    const dlg = $("builder");
+    let id = null;
+    let createdNow = false;
+    let shift = false;
+    let selected = null;
+    let pendingKey = null;
+    const urls = new WeakMap();
+    const thumb = (entry) => {
+      if (!urls.has(entry)) urls.set(entry, URL.createObjectURL(entry.blob));
+      return urls.get(entry);
+    };
+
+    const font = () => GF.get(id);
+
+    async function open(existingId) {
+      if (existingId && GF.get(existingId)) { id = existingId; createdNow = false; }
+      else { id = await GF.create("Ila Signature"); createdNow = true; refreshFontOptions(); }
+      const rec = font().rec;
+      $("bName").value = rec.name;
+      $("bBaseline").value = rec.baseline;
+      $("bScale").value = rec.scale;
+      $("bGap").value = rec.gap;
+      $("bKeep").checked = rec.keepColors;
+      $("bCycle").checked = rec.cycle;
+      shift = false;
+      selected = null;
+      renderKeys();
+      samplePreview();
+      dlg.showModal();
+    }
+
+    function hasGlyphs() {
+      const f = font();
+      return !!f && Object.values(f.images).some((a) => a.length);
+    }
+
+    async function close() {
+      if (createdNow && !hasGlyphs()) {
+        await GF.remove(id);
+        refreshFontOptions(); validateFont(); syncUI();
+      }
+      dlg.close();
+    }
+
+    function renderKeys() {
+      const kb = $("kb");
+      kb.innerHTML = "";
+      const f = font();
+      ROWS.forEach((row) => {
+        const r = document.createElement("div");
+        r.className = "kb-row";
+        [...(shift ? row[1] : row[0])].forEach((ch) => {
+          const k = document.createElement("button");
+          k.className = "key";
+          k.dataset.ch = ch;
+          const arr = f.images[ch] || [];
+          k.title = arr.length ? `${ch}: ${arr.length} drawing(s). Click to add more, × to clear` : `Upload "${ch}"`;
+          if (arr.length) {
+            k.classList.add("has");
+            k.innerHTML = `<span class="lab"></span><img alt=""><span class="clr" title="Clear">×</span>${arr.length > 1 ? `<span class="n">${arr.length}</span>` : ""}`;
+            k.querySelector("img").src = thumb(arr[0]);
+          } else {
+            k.innerHTML = `<span class="lab"></span><span class="ghost-ch"></span>`;
+            k.querySelector(".ghost-ch").textContent = ch;
+          }
+          k.querySelector(".lab").textContent = ch;
+          if (ch === selected) k.classList.add("sel");
+          r.appendChild(k);
+        });
+        kb.appendChild(r);
+      });
+      const done = ALL.filter((ch) => (f.images[ch] || []).length).length;
+      $("bCount").textContent = `${done} / ${ALL.length}`;
+      $("bShift").setAttribute("aria-pressed", String(shift));
+    }
+
+    async function addTo(ch, files) {
+      files = [...files].filter((f) => f && (f.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(f.name || "")));
+      if (!files.length) return;
+      const key = $("kb").querySelector(`.key[data-ch="${CSS.escape(ch)}"]`);
+      if (key) key.classList.add("busy");
+      try {
+        await GF.addGlyphs(id, ch, files);
+      } catch (e) {
+        toast(`Couldn't use that image for "${ch}": ${e.message}`);
+      }
+      selected = ch;
+      renderKeys();
+      changed();
+    }
+
+    function changed() {
+      clearTimeout(changed.t);
+      changed.t = setTimeout(() => {
+        samplePreview();
+        if (glyphId(state.font) === id) schedule();
+      }, 60);
+    }
+
+    let sampleToken = 0;
+    async function samplePreview() {
+      const t = ++sampleToken;
+      await ensureFont({ ...state, font: "glyph:" + id });
+      if (t !== sampleToken || !font()) return;
+      const c = $("bPreview");
+      const frame = renderFrame(1, 0, {
+        text: $("bSample").value || "Ila", font: "glyph:" + id, size: 72, align: "center",
+        lineHeight: 1.1, style: state.style === "shadow" ? "fill" : state.style,
+      });
+      c.width = frame.width; c.height = frame.height;
+      c.getContext("2d").drawImage(frame, 0, 0);
+    }
+
+    function saveRec() {
+      clearTimeout(saveRec.t);
+      saveRec.t = setTimeout(() => GF.save(id), 250);
+      GF.clearCache();
+      changed();
+    }
+
+    // events
+    $("bClose").onclick = close;
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+    $("bShift").onclick = () => { shift = !shift; renderKeys(); };
+
+    $("kb").addEventListener("click", async (e) => {
+      const k = e.target.closest(".key");
+      if (!k) return;
+      const ch = k.dataset.ch;
+      if (e.target.classList.contains("clr")) {
+        await GF.clearGlyph(id, ch);
+        renderKeys(); changed();
+        return;
+      }
+      selected = ch;
+      renderKeys();
+      pendingKey = ch;
+      $("bKeyFile").click();
+    });
+    $("bKeyFile").onchange = (e) => {
+      const files = [...e.target.files];
+      e.target.value = "";
+      if (pendingKey && files.length) addTo(pendingKey, files);
+    };
+
+    $("kb").addEventListener("dragover", (e) => {
+      const k = e.target.closest(".key");
+      if (!k) return;
+      e.preventDefault();
+      $("kb").querySelectorAll(".drop").forEach((x) => x !== k && x.classList.remove("drop"));
+      k.classList.add("drop");
+    });
+    $("kb").addEventListener("dragleave", (e) => { const k = e.target.closest(".key"); if (k) k.classList.remove("drop"); });
+    $("kb").addEventListener("drop", (e) => {
+      const k = e.target.closest(".key");
+      if (!k) return;
+      e.preventDefault();
+      e.stopPropagation();
+      k.classList.remove("drop");
+      addTo(k.dataset.ch, e.dataTransfer.files);
+    });
+    dlg.addEventListener("dragover", (e) => e.preventDefault());
+    dlg.addEventListener("drop", (e) => { e.preventDefault(); bulk(e.dataTransfer.files); });
+
+    // ⌘V a letter copied from Procreate (Universal Clipboard) onto the selected key
+    document.addEventListener("paste", (e) => {
+      if (!dlg.open || !selected) return;
+      if (e.target.matches && e.target.matches("input")) return;
+      const files = [...((e.clipboardData && e.clipboardData.items) || [])]
+        .filter((i) => i.type.startsWith("image/")).map((i) => i.getAsFile());
+      if (files.length) { e.preventDefault(); addTo(selected, files); }
+    });
+
+    // press a key on your keyboard to jump to it
+    dlg.addEventListener("keydown", (e) => {
+      if (e.target.matches("input") || e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+      if (!ALL.includes(e.key)) return;
+      e.preventDefault();
+      selected = e.key;
+      shift = ROWS.some((r) => r[1].includes(e.key));
+      renderKeys();
+    });
+
+    async function bulk(fileList) {
+      const files = [...fileList];
+      if (!files.length) return;
+      const groups = new Map();
+      const unknown = [];
+      for (const f of files) {
+        const ch = GF.parseName(f.name || "");
+        if (ch && ch !== " ") {
+          if (!groups.has(ch)) groups.set(ch, []);
+          groups.get(ch).push(f);
+        } else unknown.push(f.name);
+      }
+      if (!groups.size && selected) { await addTo(selected, files); return; }
+      let n = 0;
+      for (const [ch, fs] of groups) {
+        try { await GF.addGlyphs(id, ch, fs); n += fs.length; } catch (e) { unknown.push(fs.map((f) => f.name).join(", ")); }
+        $("bCount").textContent = `adding… ${n}`;
+      }
+      renderKeys(); changed();
+      toast(`Added ${n} drawing(s) to ${groups.size} key(s)` +
+        (unknown.length ? ` · couldn't match: ${unknown.slice(0, 4).join(", ")}${unknown.length > 4 ? "…" : ""}` : ""));
+    }
+    $("bBulk").onchange = (e) => { const f = [...e.target.files]; e.target.value = ""; bulk(f); };
+
+    $("bName").addEventListener("input", (e) => { font().rec.name = e.target.value.slice(0, 40) || "Untitled"; saveRec(); refreshFontOptions(); syncUI(); });
+    $("bBaseline").addEventListener("input", (e) => { font().rec.baseline = parseFloat(e.target.value); saveRec(); });
+    $("bScale").addEventListener("input", (e) => { font().rec.scale = parseFloat(e.target.value); saveRec(); });
+    $("bGap").addEventListener("input", (e) => { font().rec.gap = parseFloat(e.target.value); saveRec(); });
+    $("bKeep").addEventListener("change", (e) => { font().rec.keepColors = e.target.checked; saveRec(); });
+    $("bCycle").addEventListener("change", (e) => { font().rec.cycle = e.target.checked; saveRec(); });
+    $("bSample").addEventListener("input", changed);
+
+    $("bTemplate").onclick = () => {
+      GF.template(font().rec.baseline).toBlob((b) => download(b, "glyph-template-1000x1000.png"));
+      toast("Import it into Procreate — draw each letter, hide the guide layer, export PNG");
+    };
+    $("bExport").onclick = async () => {
+      const blob = await GF.exportPack(id);
+      download(blob, `${font().rec.name}.scribblefont`);
+      toast("Font pack saved — import it on any device");
+    };
+    $("bImport").onchange = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      try {
+        if (createdNow && !hasGlyphs()) await GF.remove(id);
+        const newIdent = await GF.importPack(file);
+        refreshFontOptions();
+        dlg.close();
+        await open(newIdent);
+        toast(`Imported "${font().rec.name}"`);
+      } catch (err) {
+        toast("Couldn't import: " + err.message);
+      }
+    };
+    $("bDelete").onclick = async () => {
+      if (!confirm(`Delete "${font().rec.name}" and all its drawings from this device?`)) return;
+      await GF.remove(id);
+      dlg.close();
+      refreshFontOptions(); validateFont(); syncUI(); schedule();
+      toast("Font deleted");
+    };
+    $("bUse").onclick = () => {
+      if (!hasGlyphs()) { toast("Upload at least one letter first"); return; }
+      createdNow = false;
+      state.font = "glyph:" + id;
+      dlg.close();
+      refreshFontOptions(); syncUI(); schedule();
+    };
+
+    return { open };
+  })();
+
+  // ---------- boot ----------
   loadInitial();
+  refreshFontOptions();
   wire();
   syncUI();
   renderPresets();
-  document.fonts.ready.then(rebuild);
-  rebuild();
   requestAnimationFrame(loop);
+  GF.init().then(() => {
+    refreshFontOptions();
+    validateFont();
+    syncUI();
+    rebuild();
+  });
+  document.fonts.ready.then(rebuild);
 
   // exposed for automated checks / power users
-  window.scribble = { state, renderFrame, rebuild };
+  window.scribble = { state, renderFrame, rebuild, runExport };
 })();
