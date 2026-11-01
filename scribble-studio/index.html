@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scribble Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Covered+By+Your+Grace&family=Gaegu:wght@400;700&family=Gochi+Hand&family=Indie+Flower&family=Kalam:wght@400;700&family=Nanum+Pen+Script&family=Patrick+Hand&family=Permanent+Marker&family=Reenie+Beanie&family=Rock+Salt&family=Schoolbell&family=Shadows+Into+Light&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar panel">
+    <span class="brand">scribble studio</span>
+    <nav class="modes" aria-label="Modes">
+      <button class="mode active" data-mode="scribble">scribble</button>
+      <button class="mode" disabled title="Coming soon">sfx</button>
+      <button class="mode" disabled title="Coming soon">vhs</button>
+    </nav>
+  </header>
+
+  <section class="font-bar panel">
+    <label for="font">font:</label>
+    <select id="font"></select>
+    <label class="btn small ghost" title="Use your own handwriting font (.ttf / .otf / .woff)">
+      + upload
+      <input id="fontUpload" type="file" accept=".ttf,.otf,.woff,.woff2" hidden />
+    </label>
+  </section>
+
+  <main class="stage" id="stage">
+    <canvas id="preview" aria-label="Text preview"></canvas>
+    <textarea id="text" spellcheck="false" rows="2" aria-label="Your text">filmkid</textarea>
+    <p class="hint">Type above · Shift+Enter for a new line · ⌘/Ctrl+S saves a PNG</p>
+  </main>
+
+  <section class="controls">
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">size</span>
+        <input type="range" id="size" min="24" max="320" value="128" />
+        <output for="size" class="val" id="sizeVal">128</output>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">spacing</span>
+        <input type="range" id="spacing" min="-20" max="60" value="0" />
+        <output for="spacing" class="val" id="spacingVal">0</output>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">line height</span>
+        <input type="range" id="lineHeight" min="0.6" max="2.4" step="0.05" value="1.1" />
+        <output for="lineHeight" class="val" id="lineHeightVal">1.1</output>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">thickness</span>
+        <div class="seg" data-key="thickness">
+          <button data-v="thin">thin</button>
+          <button data-v="regular" class="on">regular</button>
+          <button data-v="bold">bold</button>
+          <button data-v="heavy">heavy</button>
+        </div>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">style</span>
+        <div class="seg" data-key="style">
+          <button data-v="fill" class="on">fill</button>
+          <button data-v="outline">outline</button>
+          <button data-v="shadow">shadow</button>
+          <button data-v="crayon">crayon</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">color</span>
+        <div class="swatches" id="swatches"></div>
+        <input type="color" id="color" value="#3b4fd8" />
+        <input type="text" id="colorHex" class="hex" value="#3B4FD8" maxlength="7" />
+      </div>
+      <div class="panel ctrl" id="shadowCtrl" hidden>
+        <span class="lbl">shadow</span>
+        <input type="color" id="shadowColor" value="#ff5a7a" />
+        <input type="range" id="shadowOffset" min="1" max="20" value="6" />
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">align</span>
+        <div class="seg" data-key="align">
+          <button data-v="left">left</button>
+          <button data-v="center" class="on">center</button>
+          <button data-v="right">right</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">roughness</span>
+        <input type="range" id="roughness" min="0" max="10" step="0.5" value="3" />
+        <output class="val" id="roughnessVal">3</output>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">wobble</span>
+        <input type="range" id="wobble" min="0" max="10" step="0.5" value="2" />
+        <output class="val" id="wobbleVal">2</output>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">boil</span>
+        <div class="seg" data-key="boil">
+          <button data-v="0">off</button>
+          <button data-v="6">slow</button>
+          <button data-v="10" class="on">med</button>
+          <button data-v="16">fast</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">background</span>
+        <div class="seg" data-key="bgMode">
+          <button data-v="transparent" class="on">transparent</button>
+          <button data-v="solid">solid</button>
+        </div>
+        <input type="color" id="bgColor" value="#ffffff" />
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">export</span>
+        <div class="seg" data-key="scale">
+          <button data-v="1">1x</button>
+          <button data-v="2" class="on">2x</button>
+          <button data-v="4">4x</button>
+        </div>
+        <div class="seg" data-key="videoFormat">
+          <button data-v="webm" class="on">webm</button>
+          <button data-v="mp4">mp4</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row actions">
+      <button class="btn" id="exportPng">save png</button>
+      <button class="btn" id="exportVideo">save video</button>
+      <button class="btn" id="copyPng">copy png</button>
+      <button class="btn ghost" id="exportSvg" title="Static SVG with the PNG embedded — handy for Figma / Keynote">save svg</button>
+      <button class="btn ghost" id="reseed" title="New random hand-drawn variation">🎲 reshuffle</button>
+      <button class="btn ghost" id="share">copy link</button>
+    </div>
+
+    <div class="row presets">
+      <div class="panel ctrl wide">
+        <span class="lbl">presets</span>
+        <div id="presetList" class="preset-list"></div>
+        <button class="btn small" id="savePreset">+ save current</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
