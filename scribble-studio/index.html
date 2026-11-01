@@ -124,6 +124,83 @@
       </div>
     </div>
 
+    <h2 class="section-title">animate in &amp; out</h2>
+
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">in</span>
+        <select id="animIn" class="sel" aria-label="In animation"></select>
+        <input type="range" id="inDur" min="0.2" max="5" step="0.1" value="0.6" aria-label="In duration" />
+        <output class="val" id="inDurVal">0.6s</output>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">out</span>
+        <select id="animOut" class="sel" aria-label="Out animation"></select>
+        <input type="range" id="outDur" min="0.2" max="5" step="0.1" value="0.6" aria-label="Out duration" />
+        <output class="val" id="outDurVal">0.6s</output>
+      </div>
+    </div>
+
+    <div id="animDetails" hidden>
+      <div class="row">
+        <div class="panel ctrl">
+          <span class="lbl">animate by</span>
+          <div class="seg" data-key="animBy">
+            <button data-v="all">whole</button>
+            <button data-v="word">word</button>
+            <button data-v="letter" class="on">letter</button>
+          </div>
+        </div>
+        <div class="panel ctrl">
+          <span class="lbl">stagger</span>
+          <input type="range" id="stagger" min="0" max="0.5" step="0.01" value="0.05" aria-label="Stagger between letters/words" />
+          <output class="val" id="staggerVal">0.05s</output>
+        </div>
+        <div class="panel ctrl">
+          <span class="lbl">order</span>
+          <div class="seg" data-key="order">
+            <button data-v="forward" class="on" title="First to last">→</button>
+            <button data-v="reverse" title="Last to first">←</button>
+            <button data-v="center" title="From the middle outwards">↔</button>
+            <button data-v="random" title="Random order (🎲 reshuffle changes it)">rnd</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row curves">
+        <div class="panel curve-card">
+          <div class="curve-head">
+            <span class="lbl">in curve</span>
+            <select id="easeIn" class="sel" aria-label="In easing"></select>
+          </div>
+          <canvas id="curveIn" class="curve" aria-label="In easing graph — drag the yellow handles"></canvas>
+          <code class="bez" id="bezIn"></code>
+        </div>
+        <div class="panel curve-card">
+          <div class="curve-head">
+            <span class="lbl">out curve</span>
+            <select id="easeOut" class="sel" aria-label="Out easing"></select>
+          </div>
+          <canvas id="curveOut" class="curve" aria-label="Out easing graph — drag the yellow handles"></canvas>
+          <code class="bez" id="bezOut"></code>
+        </div>
+      </div>
+
+      <div class="panel timeline">
+        <button class="btn small light" id="play" title="Play / pause (space)">❚❚</button>
+        <div class="tl-track">
+          <div class="tl-seg tl-in" id="tlIn"></div>
+          <div class="tl-seg tl-out" id="tlOut"></div>
+          <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Timeline" />
+        </div>
+        <output class="val" id="tlTime">0.0 / 0.0s</output>
+        <label class="chk-inline" title="Hold every pose for 2 frames at 24fps — classic hand-drawn timing">
+          <input type="checkbox" id="steps" /> on 2s
+        </label>
+      </div>
+      <p class="hint">Clip length = the <b>length</b> slider below, stretched automatically when in + out need more time. Exports include the animation.</p>
+    </div>
+
     <h2 class="section-title">export for your editor</h2>
 
     <div class="row">
@@ -310,6 +387,7 @@
   <script src="vendor/mp4-muxer.js"></script>
   <script src="glyphfonts.js"></script>
   <script src="exporter.js"></script>
+  <script src="anim.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

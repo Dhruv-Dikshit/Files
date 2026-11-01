@@ -94,37 +94,43 @@ window.Exporter = (() => {
     return Math.min((sb.w * (spec.fill || 70)) / 100 / cbAtScale1.w, sb.h / cbAtScale1.h);
   }
 
-  /** Places boil drawings into output-sized canvases. bg: null (transparent) or a CSS colour. */
-  function compose(drawings, spec, bg) {
+  /**
+   * Places one drawing into an output-sized canvas (reusing `target` if given).
+   * bg: null (transparent) or a CSS colour. cb: content box used for placement (fixed frames).
+   */
+  function composeOne(d, spec, bg, cb, target) {
     if (typeof spec === "string") spec = { frame: spec };
-    const [W, H] = frameSize(spec, drawings[0]);
-    const cb = FRAMES[spec.frame] ? contentBox(drawings) : null;
-    return drawings.map((d) => {
-      const c = document.createElement("canvas");
-      c.width = W; c.height = H;
-      const ctx = c.getContext("2d");
-      if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H); }
-      const p = placement(spec, W, H, d, cb);
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(d, p.x, p.y, d.width * p.s, d.height * p.s);
-      return c;
-    });
+    const [W, H] = frameSize(spec, d);
+    const c = target || document.createElement("canvas");
+    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H); }
+    const p = placement(spec, W, H, d, cb || (FRAMES[spec.frame] ? contentBox([d]) : null));
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(d, p.x, p.y, d.width * p.s, d.height * p.s);
+    return c;
   }
 
-  /** which drawing shows on output frame i */
-  const drawingAt = (i, fps, boil, n) => (boil > 0 ? Math.floor((i * boil) / fps) % n : 0);
+  /** Places several drawings (sharing one content box so they line up). */
+  function compose(drawings, spec, bg) {
+    if (typeof spec === "string") spec = { frame: spec };
+    const cb = FRAMES[spec.frame] ? contentBox(drawings) : null;
+    return drawings.map((d) => composeOne(d, spec, bg, cb));
+  }
 
   // ---------- MP4 (H.264) ----------
-  function fitAvc(canvases) {
-    const { width: W, height: H } = canvases[0];
+  /** Wraps a frame provider so frames fit H.264's size limit (downscaling only if needed). */
+  function fitAvc(provider, W, H) {
     const s = Math.min(1, Math.sqrt(MAX_AVC_AREA / (W * H)), MAX_AVC_SIDE / Math.max(W, H));
-    if (s >= 1) return canvases;
-    return canvases.map((c) => {
-      const o = document.createElement("canvas");
-      o.width = even(W * s); o.height = even(H * s);
-      o.getContext("2d").drawImage(c, 0, 0, o.width, o.height);
-      return o;
-    });
+    if (s >= 1) return { provider, W, H };
+    const o = document.createElement("canvas");
+    o.width = even(W * s); o.height = even(H * s);
+    const octx = o.getContext("2d");
+    return {
+      W: o.width, H: o.height,
+      provider: (i) => { octx.clearRect(0, 0, o.width, o.height); octx.drawImage(provider(i), 0, 0, o.width, o.height); return o; },
+    };
   }
 
   async function pickAvc(W, H, fps, bitrate) {
@@ -139,13 +145,16 @@ window.Exporter = (() => {
     return null;
   }
 
-  async function mp4(canvases, { fps, boil, seconds, onProgress }) {
-    canvases = fitAvc(canvases);
-    const W = canvases[0].width, H = canvases[0].height;
-    if (!window.VideoEncoder || !window.Mp4Muxer) return recorderFallback(canvases, { fps, boil, seconds, mp4: true });
+  /**
+   * provider(i) → canvas for output frame i (may reuse one canvas). total = frame count.
+   */
+  async function mp4(rawProvider, { fps, total, onProgress }) {
+    const first = rawProvider(0);
+    const { provider, W, H } = fitAvc(rawProvider, first.width, first.height);
+    if (!window.VideoEncoder || !window.Mp4Muxer) return recorderFallback(provider, { fps, total, mp4: true });
     const bitrate = Math.min(60e6, Math.max(8e6, W * H * fps * 0.25));
     const cfg = await pickAvc(W, H, fps, bitrate);
-    if (!cfg) return recorderFallback(canvases, { fps, boil, seconds, mp4: true });
+    if (!cfg) return recorderFallback(provider, { fps, total, mp4: true });
 
     const muxer = new Mp4Muxer.Muxer({
       target: new Mp4Muxer.ArrayBufferTarget(),
@@ -158,11 +167,10 @@ window.Exporter = (() => {
       error: (e) => { failure = e; },
     });
     enc.configure(cfg);
-    const total = Math.max(1, Math.round(seconds * fps));
     const dur = 1e6 / fps;
     for (let i = 0; i < total; i++) {
       if (failure) throw failure;
-      const vf = new VideoFrame(canvases[drawingAt(i, fps, boil, canvases.length)], { timestamp: Math.round(i * dur), duration: Math.round(dur) });
+      const vf = new VideoFrame(provider(i), { timestamp: Math.round(i * dur), duration: Math.round(dur) });
       enc.encode(vf, { keyFrame: i % (fps * 2) === 0 });
       vf.close();
       if (enc.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 4));
@@ -180,22 +188,22 @@ window.Exporter = (() => {
     return list.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
   }
 
-  async function recorderFallback(canvases, { fps, boil, seconds, mp4: wantMp4 }) {
+  async function recorderFallback(provider, { fps, total, mp4: wantMp4 }) {
     const mp4s = ["video/mp4;codecs=avc1.640034", "video/mp4;codecs=avc1", "video/mp4"];
     const webms = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"];
     const mime = wantMp4 ? pickMime(mp4s) || pickMime(webms) : pickMime(webms) || pickMime(mp4s);
     if (!mime) throw new Error("this browser can't record video");
+    const first = provider(0);
     const c = document.createElement("canvas");
-    c.width = canvases[0].width; c.height = canvases[0].height;
+    c.width = first.width; c.height = first.height;
     const ctx = c.getContext("2d");
-    const paint = (i) => { ctx.clearRect(0, 0, c.width, c.height); ctx.drawImage(canvases[drawingAt(i, fps, boil, canvases.length)], 0, 0); };
+    const paint = (i) => { ctx.clearRect(0, 0, c.width, c.height); ctx.drawImage(provider(i), 0, 0); };
     paint(0);
     const rec = new MediaRecorder(c.captureStream(fps), { mimeType: mime, videoBitsPerSecond: 12e6 });
     const chunks = [];
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     const stopped = new Promise((r) => (rec.onstop = r));
     rec.start();
-    const total = Math.round(seconds * fps);
     for (let i = 0; i < total; i++) { paint(i); await new Promise((r) => setTimeout(r, 1000 / fps)); }
     rec.stop();
     await stopped;
@@ -203,7 +211,7 @@ window.Exporter = (() => {
     return { blob: new Blob(chunks, { type }), ext: type.includes("mp4") ? "mp4" : "webm" };
   }
 
-  const webm = (canvases, opts) => recorderFallback(canvases, { ...opts, mp4: false });
+  const webm = (provider, opts) => recorderFallback(provider, { ...opts, mp4: false });
 
   // ---------- PNG sequence in a .zip (store, no compression — PNG is already compressed) ----------
   const CRC_TABLE = (() => {
@@ -272,21 +280,26 @@ window.Exporter = (() => {
     return new Blob([...parts, ...central, end.buffer], { type: "application/zip" });
   }
 
-  async function pngSequence(canvases, { fps, boil, seconds, base, onProgress }) {
-    const uniques = [];
-    for (const c of canvases) {
-      const blob = await new Promise((r) => c.toBlob(r, "image/png"));
-      const data = new Uint8Array(await blob.arrayBuffer());
-      uniques.push({ data, crc: crc32(data) });
-    }
-    const total = Math.max(1, Math.round(seconds * fps));
+  /** key(i): frames with the same key are identical and get encoded once. */
+  async function pngSequence(provider, { fps, total, base, key, onProgress }) {
+    const cache = new Map();
     const files = [];
+    let W = 0, H = 0;
     for (let i = 0; i < total; i++) {
-      const u = uniques[drawingAt(i, fps, boil, uniques.length)];
+      const k = key ? key(i) : i;
+      let u = cache.get(k);
+      if (!u) {
+        const c = provider(i);
+        W = c.width; H = c.height;
+        const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+        const data = new Uint8Array(await blob.arrayBuffer());
+        u = { data, crc: crc32(data) };
+        cache.set(k, u);
+      }
       files.push({ name: `${base}/${base}_${String(i).padStart(4, "0")}.png`, data: u.data, crc: u.crc });
-      if (i % 50 === 0) onProgress && onProgress(i / total);
+      if (i % 5 === 0) { onProgress && onProgress(i / total); await new Promise((r) => setTimeout(r, 0)); }
     }
-    const readme = new TextEncoder().encode(README(base, fps, canvases[0].width, canvases[0].height));
+    const readme = new TextEncoder().encode(README(base, fps, W, H));
     files.push({ name: `${base}/HOW-TO-IMPORT.txt`, data: readme, crc: crc32(readme) });
     return { blob: zip(files), ext: "zip" };
   }
@@ -313,5 +326,5 @@ FINAL CUT PRO
 Made with Scribble Studio.
 `;
 
-  return { compose, mp4, webm, pngSequence, FRAMES, SAFE, frameSize, safeBox, contentBox, placement, idealScale };
+  return { compose, composeOne, mp4, webm, pngSequence, FRAMES, SAFE, frameSize, safeBox, contentBox, placement, idealScale };
 })();

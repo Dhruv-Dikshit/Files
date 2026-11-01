@@ -47,6 +47,30 @@ More details:
 - Letters you haven't drawn yet fall back to a handwritten font, so you can test as you go.
 - **⬇ export pack** saves the whole font as one `.scribblefont` file for backup or another computer. **import pack** loads it back. Fonts are stored in the browser (IndexedDB) and never uploaded anywhere.
 
+## Animate in & out
+
+Pick an **in** and an **out** animation, each with its own duration (**0.2 s – 5 s**):
+
+| Effect | What it does |
+|---|---|
+| Fade | Opacity |
+| Blur | Comes into focus / dissolves into blur |
+| Glow | Blooms with a glow of the text colour, then settles |
+| Grow | Scales from nothing (try the *Back out* curve for a pop) |
+| Slide up / down / left / right | Moves in from the opposite side, leaves in that direction |
+| Flicker | Random on/off like a dodgy neon sign, settling on |
+| Motion blur | Whooshes in sideways with real motion-blur streaks |
+| Typewriter | Letters pop on one at a time (use *letter* + some stagger) |
+| Write on (wipe) | Reveals left to right as if being written |
+
+- **Animate by** the whole text, word by word or letter by letter. **Stagger** sets the delay between units (0–0.5 s). **Order** goes first→last, last→first, from the centre outwards, or random.
+- **Motion curves**: separate easing for in and out. The presets are Linear, Ease, Sine, Quad, Cubic, Quart, Expo, Circ, Back (overshoot / anticipate), Elastic, Bounce, and Stepped (stop-motion). You can also **drag the yellow handles** on the graph to make a custom `cubic-bezier`. The value is shown under the graph so you can copy it into CSS or match it in After Effects. A pink dot runs along the curve so you can feel the timing.
+- **Timeline**: play / pause (space bar) and scrub. Green is the in section, pink is the out section. **On 2s** holds every pose for 2 frames for that hand-made feel.
+- The clip length comes from the **length** slider. It's stretched automatically if in + stagger + out need more time.
+- All exports (MP4s, PNG sequence, WebM) include the animation, and it combines with the boil, roughness and every frame size.
+
+Under the hood every letter is pre-rendered as a sprite with roughness and the other looks applied (`buildDrawing` in `app.js`). `anim.js` then only moves, fades, blurs or glows sprites per frame, which keeps playback smooth.
+
 ## Short-form frames (Reels, Shorts, TikTok, IG feed)
 
 | Frame | Size (HD / 4K) | For |
@@ -102,8 +126,8 @@ The web version runs as-is. To get a native `.app`:
 **For video editors (the core audience)**
 - **ProRes 4444 / HEVC-with-alpha** (needs the native Mac app wrapper) for a single transparent video file.
 - **Animated GIF / APNG / Lottie** export.
-- **Write-on animation**: letters draw themselves stroke by stroke, with adjustable speed and easing.
-- **Per-letter animation presets**: bounce, pop-in, typewriter, jitter-in.
+- **True stroke-by-stroke write-on** (follow the pen path of each drawn letter instead of a wipe).
+- Keyframe presets you can save and share, and per-line timing.
 - Set the **loop length and frame count** (2–12 boil frames) and the export frame rate (24/25/30/60).
 - **Final Cut / Premiere plugin** or a Motion template that wraps the renderer.
 
