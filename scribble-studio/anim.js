@@ -111,6 +111,7 @@ window.Anim = (() => {
     flicker: "Flicker",
     motionBlur: "Motion blur",
     typewriter: "Typewriter",
+    strokeOn: "Write on (pen strokes)",
     writeOn: "Write on (wipe)",
   };
   const MOVES = { slideUp: [0, -1], slideDown: [0, 1], slideLeft: [-1, 0], slideRight: [1, 0], motionBlur: [1, 0] };
@@ -159,6 +160,12 @@ window.Anim = (() => {
         break;
       }
       case "typewriter": p.alpha = phase === "in" ? (a < 0.5 ? 1 : 0) : (a < 0.5 ? 1 : 0); break;
+      case "strokeOn": {
+        let q = clamp01(1 - a);
+        if (ctx.sub && ctx.sub.m > 1) q = clamp01(q * ctx.sub.m - ctx.sub.j); // letters of a word/line in turn
+        p.strokeQ = q;
+        break;
+      }
       case "writeOn": {
         const b = ctx.bounds;
         const w = b.x1 - b.x0;
@@ -172,19 +179,27 @@ window.Anim = (() => {
 
   // ---------- timeline ----------
   /** settings → normalised timing info for `units` animated units */
-  function timing(A, units) {
+  function timing(A, units, lines = 1) {
     const n = Math.max(1, units);
-    const inSpan = A.in !== "none" ? A.inDur + A.stagger * (n - 1) : 0;
-    const outSpan = A.out !== "none" ? A.outDur + A.stagger * (n - 1) : 0;
+    const spread = A.stagger * (n - 1) + (A.lineDelay || 0) * Math.max(0, lines - 1);
+    const inSpan = A.in !== "none" ? A.inDur + spread : 0;
+    const outSpan = A.out !== "none" ? A.outDur + spread : 0;
     const total = Math.max(A.seconds, inSpan + outSpan + (inSpan && outSpan ? 0.3 : 0.15));
     return { inSpan, outSpan, total, n };
   }
 
   function unitsOf(drawing, by) {
-    const key = by === "word" ? "word" : by === "letter" ? "idx" : null;
+    const key = by === "word" ? "word" : by === "letter" ? "idx" : by === "line" ? "line" : null;
     const map = drawing.sprites.map((s) => (key ? s[key] : 0));
     const n = map.length ? Math.max(...map) + 1 : 1;
-    return { map, n };
+    const lines = drawing.sprites.length ? Math.max(...drawing.sprites.map((s) => s.line)) + 1 : 1;
+    return { map, n, lines };
+  }
+
+  /** total clip length for a drawing with settings A */
+  function totalFor(drawing, A) {
+    const u = unitsOf(drawing, A.by);
+    return timing(A, u.n, u.lines);
   }
 
   function orderOf(n, order, seed) {
@@ -201,18 +216,141 @@ window.Anim = (() => {
     return o;
   }
 
-  /** { phase, a } for a unit at time t, or null when resting. */
-  function stateAt(t, slot, A, T) {
+  /** { phase, a } for a unit starting `off` seconds late, at time t — or null when resting. */
+  function stateAt(t, off, A, T) {
     if (A.out !== "none") {
-      const os = T.total - T.outSpan + slot * A.stagger;
+      const os = T.total - T.outSpan + off;
       if (t >= os) return { phase: "out", a: A.easeOutFn(clamp01((t - os) / A.outDur)) };
     }
     if (A.in !== "none") {
-      const is = slot * A.stagger;
+      const is = off;
       const u = (t - is) / A.inDur;
       if (u < 1) return { phase: "in", a: 1 - A.easeInFn(clamp01(u)) };
     }
     return null;
+  }
+
+  // ---------- pen-stroke write-on ----------
+  /** Zhang–Suen thinning: reduces a binary mask to a 1-pixel skeleton (in place). */
+  function thin(img, w, h) {
+    const del = [];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let pass = 0; pass < 2; pass++) {
+        del.length = 0;
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            const i = y * w + x;
+            if (!img[i]) continue;
+            const p2 = img[i - w], p3 = img[i - w + 1], p4 = img[i + 1], p5 = img[i + w + 1];
+            const p6 = img[i + w], p7 = img[i + w - 1], p8 = img[i - 1], p9 = img[i - w - 1];
+            const B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (B < 2 || B > 6) continue;
+            const A = (!p2 && p3) + (!p3 && p4) + (!p4 && p5) + (!p5 && p6) + (!p6 && p7) + (!p7 && p8) + (!p8 && p9) + (!p9 && p2);
+            if (A !== 1) continue;
+            if (pass === 0 ? (p2 && p4 && p6) || (p4 && p6 && p8) : (p2 && p4 && p8) || (p2 && p6 && p8)) continue;
+            del.push(i);
+          }
+        }
+        for (const i of del) img[i] = 0;
+        if (del.length) changed = true;
+      }
+    }
+  }
+
+  /**
+   * For every ink pixel of a sprite: when (0–1) the pen reaches it. Strokes are traced along the
+   * skeleton from the top-left-most stroke end, following each stroke to its end before jumping.
+   * Worked out on a downsampled grid (max ~220px) for speed, then looked up per pixel.
+   */
+  function strokeOrder(sp) {
+    if (sp._stroke) return sp._stroke;
+    const c = sp.c, W = c.width, H = c.height;
+    const img = c.getContext("2d").getImageData(0, 0, W, H);
+    const d = img.data;
+    const f = Math.max(1, Math.max(W, H) / 220);
+    const w = Math.max(3, Math.ceil(W / f) + 2), h = Math.max(3, Math.ceil(H / f) + 2);
+    const sum = new Float32Array(w * h), cnt = new Float32Array(w * h), any = new Uint8Array(w * h);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const a = d[(y * W + x) * 4 + 3];
+        const k = (Math.floor(y / f) + 1) * w + Math.floor(x / f) + 1;
+        sum[k] += a; cnt[k]++;
+        if (a > 0) any[k] = 1;
+      }
+    }
+    const mask = new Uint8Array(w * h);
+    for (let k = 0; k < mask.length; k++) mask[k] = cnt[k] && sum[k] / cnt[k] > 70 ? 1 : 0;
+    const sk = mask.slice();
+    thin(sk, w, h);
+
+    const N8 = [-w - 1, -w, -w + 1, -1, 1, w - 1, w, w + 1];
+    const order = new Float32Array(w * h).fill(-1);
+    const skel = [];
+    for (let k = 0; k < sk.length; k++) if (sk[k]) skel.push(k);
+    const degree = (k) => N8.reduce((s, o) => s + sk[k + o], 0);
+    const key = (k) => (k % w) + Math.floor(k / w) * 0.6; // prefer starting top-left, like handwriting
+    const starts = skel.filter((k) => degree(k) <= 1).sort((a, b) => key(a) - key(b))
+      .concat(skel.slice().sort((a, b) => key(a) - key(b)));
+    let n = 0;
+    for (const s0 of starts) {
+      if (order[s0] >= 0) continue;
+      const stack = [s0];
+      while (stack.length) {
+        const k = stack.pop();
+        if (order[k] >= 0) continue;
+        order[k] = n++;
+        // push diagonals first so straight neighbours are followed first
+        for (const o of [-w - 1, -w + 1, w - 1, w + 1, -w, -1, 1, w]) if (sk[k + o] && order[k + o] < 0) stack.push(k + o);
+      }
+    }
+    // spread the pen time from the skeleton out to the full stroke width (multi-source BFS)
+    const val = new Float32Array(w * h).fill(-1);
+    let queue = [];
+    for (const k of skel) { val[k] = order[k]; queue.push(k); }
+    if (!queue.length) { // tiny dot: reveal left→right
+      for (let k = 0; k < any.length; k++) if (any[k]) { val[k] = k % w; queue.push(k); }
+      n = w;
+    }
+    while (queue.length) {
+      const next = [];
+      for (const k of queue) {
+        for (const o of N8) {
+          const q = k + o;
+          if (q >= 0 && q < val.length && any[q] && val[q] < 0) { val[q] = val[k]; next.push(q); }
+        }
+      }
+      queue = next;
+    }
+    const total = Math.max(1, n);
+    const o = new Float32Array(W * H);
+    const alpha = new Uint8ClampedArray(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        alpha[i] = d[i * 4 + 3];
+        const v = val[(Math.floor(y / f) + 1) * w + Math.floor(x / f) + 1];
+        o[i] = v < 0 ? 1 : v / total;
+      }
+    }
+    sp._stroke = { W, H, o, alpha, img, canvas: null };
+    return sp._stroke;
+  }
+
+  function strokeSprite(sp, q) {
+    const S = strokeOrder(sp);
+    if (!S.canvas) { S.canvas = document.createElement("canvas"); S.canvas.width = S.W; S.canvas.height = S.H; }
+    const d = S.img.data;
+    const feather = 0.025;
+    for (let i = 0, n = S.o.length; i < n; i++) {
+      const a = S.alpha[i];
+      if (!a) continue;
+      const ov = S.o[i];
+      d[i * 4 + 3] = ov <= q ? a : ov < q + feather ? a * (1 - (ov - q) / feather) : 0;
+    }
+    S.canvas.getContext("2d").putImageData(S.img, 0, 0);
+    return S.canvas;
   }
 
   // ---------- drawing ----------
@@ -243,6 +381,10 @@ window.Anim = (() => {
     const alpha = clamp01(p.alpha);
     if (alpha <= 0.003 || p.scale <= 0.002) return;
     let src = sp.c;
+    if (p.strokeQ != null) {
+      if (p.strokeQ <= 0) return;
+      if (p.strokeQ < 1) src = strokeSprite(sp, p.strokeQ);
+    }
     if (p.blur > 0.6) src = blurred(src, p.blur);
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -288,35 +430,59 @@ window.Anim = (() => {
     if (c.width !== drawing.W || c.height !== drawing.H) { c.width = drawing.W; c.height = drawing.H; }
     const ctx = c.getContext("2d");
     ctx.clearRect(0, 0, c.width, c.height);
-    const { map, n } = unitsOf(drawing, A.by);
-    const T = timing(A, n);
+    const { map, n, lines } = unitsOf(drawing, A.by);
+    const T = timing(A, n, lines);
     const slots = orderOf(n, A.order, A.seed);
     if (A.steps) t = Math.floor(t * 12 + 1e-6) / 12; // animate "on twos" like hand-drawn work
     const dt = 1 / (2 * (A.fps || 24)); // 180° shutter for motion blur
 
     const bounds = new Array(n);
+    const members = new Array(n);
     drawing.sprites.forEach((sp, i) => {
       const u = map[i];
       const b = bounds[u] || (bounds[u] = { x0: Infinity, x1: -Infinity });
       b.x0 = Math.min(b.x0, sp.ix0); b.x1 = Math.max(b.x1, sp.ix1);
+      (members[u] || (members[u] = [])).push(i);
     });
+    const subOf = new Array(drawing.sprites.length);
+    members.forEach((list) => list && list.forEach((i, j) => (subOf[i] = { j, m: list.length })));
+    const offOf = (i) => slots[map[i]] * A.stagger + drawing.sprites[i].line * (A.lineDelay || 0);
     const dist = drawing.px * (A.by === "all" ? 1.3 : A.by === "word" ? 1.0 : 0.85);
 
     drawing.sprites.forEach((sp, i) => {
       const u = map[i];
-      const st = stateAt(t, slots[u], A, T);
+      const off = offOf(i);
+      const st = stateAt(t, off, A, T);
       if (!st) { ctx.drawImage(sp.c, sp.x, sp.y); return; }
       const effect = st.phase === "in" ? A.in : A.out;
       let aPrev = null;
       if (effect === "motionBlur") {
-        const pst = stateAt(t - dt, slots[u], A, T);
+        const pst = stateAt(t - dt, off, A, T);
         aPrev = pst && pst.phase === st.phase ? pst.a : st.phase === "in" ? 1 : 0;
       }
-      const p = effectParams(effect, st.a, st.phase, { px: drawing.px, dist, t, unit: u, seed: A.seed, bounds: bounds[u], aPrev });
+      const p = effectParams(effect, st.a, st.phase, { px: drawing.px, dist, t, unit: u, seed: A.seed, bounds: bounds[u], aPrev, sub: subOf[i] });
       drawSprite(ctx, sp, p, A.glowColor || A.color);
     });
     return c;
   }
+
+  // ---------- motion presets ----------
+  const MOTION_KEYS = ["animIn", "animOut", "inDur", "outDur", "animBy", "stagger", "order", "lineDelay",
+    "easeIn", "easeInBez", "easeOut", "easeOutBez", "steps"];
+  const base = { inDur: 0.6, outDur: 0.6, animBy: "letter", stagger: 0.05, order: "forward", lineDelay: 0,
+    easeIn: "cubicOut", easeInBez: [0.33, 1, 0.68, 1], easeOut: "cubicIn", easeOutBez: [0.32, 0, 0.67, 0], steps: false };
+  const PRESETS = [
+    ["Pop up", { ...base, animIn: "slideUp", animOut: "fade", easeIn: "backOut", stagger: 0.04, inDur: 0.5, outDur: 0.4 }],
+    ["Handwritten", { ...base, animIn: "strokeOn", animOut: "fade", animBy: "letter", stagger: 0.12, inDur: 0.45, easeIn: "sineInOut", outDur: 0.5 }],
+    ["Signature (one stroke)", { ...base, animIn: "strokeOn", animOut: "strokeOn", animBy: "line", stagger: 0, lineDelay: 0.4, inDur: 2.2, outDur: 1.2, easeIn: "linear", easeOut: "quadIn" }],
+    ["Neon sign", { ...base, animIn: "flicker", animOut: "glow", animBy: "letter", stagger: 0.06, inDur: 0.9, outDur: 0.8, order: "random", steps: true }],
+    ["Soft focus", { ...base, animIn: "blur", animOut: "blur", animBy: "word", stagger: 0.15, inDur: 0.9, outDur: 0.7, easeIn: "sineOut", easeOut: "sineIn" }],
+    ["Whoosh", { ...base, animIn: "motionBlur", animOut: "motionBlur", animBy: "word", stagger: 0.08, inDur: 0.45, outDur: 0.35, easeIn: "expoOut", easeOut: "expoIn" }],
+    ["Typewriter", { ...base, animIn: "typewriter", animOut: "fade", animBy: "letter", stagger: 0.07, inDur: 0.2, outDur: 0.4, easeIn: "linear" }],
+    ["Bouncy grow", { ...base, animIn: "grow", animOut: "grow", animBy: "letter", stagger: 0.05, inDur: 0.8, outDur: 0.4, easeIn: "elasticOut", easeOut: "backIn" }],
+    ["Line by line", { ...base, animIn: "slideUp", animOut: "slideUp", animBy: "line", stagger: 0, lineDelay: 0.35, inDur: 0.6, outDur: 0.5, easeIn: "quartOut", easeOut: "quartIn" }],
+    ["Stop-motion drop", { ...base, animIn: "slideDown", animOut: "slideDown", animBy: "letter", stagger: 0.05, inDur: 0.6, outDur: 0.5, easeIn: "bounceOut", easeOut: "backIn", steps: true }],
+  ];
 
   /** extra canvas room needed so moving letters aren't clipped (multiples of px) */
   function marginFor(A) {
@@ -436,5 +602,5 @@ window.Anim = (() => {
     return { draw, restart: () => (t0 = performance.now()) };
   }
 
-  return { EASES, EASE_GROUPS, EFFECTS, easeFn, compose, timing, unitsOf, marginFor, CurveEditor };
+  return { EASES, EASE_GROUPS, EFFECTS, PRESETS, MOTION_KEYS, easeFn, compose, timing, totalFor, unitsOf, marginFor, strokeOrder, CurveEditor };
 })();

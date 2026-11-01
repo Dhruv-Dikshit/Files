@@ -19,7 +19,6 @@
   ];
   const FALLBACK_FONT = "Gochi Hand"; // used for characters your drawn font doesn't have yet
   const SWATCHES = ["#3b4fd8", "#111111", "#ffffff", "#e5484d", "#f5a524", "#12a150"];
-  const BOIL_FRAMES = 4;
   const THICKNESS = { thin: -0.016, regular: 0, bold: 0.022, heavy: 0.042 };
   const BG = { transparent: null, black: "#000000", white: "#ffffff" };
 
@@ -38,6 +37,8 @@
     roughness: 3,
     wobble: 2,
     boil: 8,
+    boilFrames: 4,
+    seamless: true,
     bgMode: "transparent",
     bgColor: "#ffffff",
     scale: 2,
@@ -57,6 +58,7 @@
     animBy: "letter",
     stagger: 0.05,
     order: "forward",
+    lineDelay: 0,
     easeIn: "cubicOut",
     easeInBez: [0.33, 1, 0.68, 1],
     easeOut: "cubicIn",
@@ -372,7 +374,7 @@
   function animSettings() {
     return {
       in: state.animIn, out: state.animOut, inDur: state.inDur, outDur: state.outDur,
-      stagger: state.stagger, by: state.animBy, order: state.order, seconds: state.seconds,
+      stagger: state.stagger, by: state.animBy, order: state.order, seconds: state.seconds, lineDelay: state.lineDelay,
       easeInFn: window.Anim.easeFn(state.easeIn, state.easeInBez),
       easeOutFn: window.Anim.easeFn(state.easeOut, state.easeOutBez),
       steps: state.steps, seed: state.seed, color: state.color, fps: state.fps,
@@ -386,7 +388,7 @@
     await ensureFont();
     if (token !== renderToken) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const count = state.boil > 0 ? BOIL_FRAMES : 1;
+    const count = state.boil > 0 ? state.boilFrames : 1;
     const margin = animMargin();
     const frames = [], drawings = [];
     for (let f = 0; f < count; f++) {
@@ -439,7 +441,7 @@
     let d;
     if (animActive() && previewDrawings[idx]) {
       const A = animSettings();
-      const T = window.Anim.timing(A, window.Anim.unitsOf(previewDrawings[idx], A.by).n);
+      const T = window.Anim.totalFor(previewDrawings[idx], A);
       if (playing) scrubT = ((t - playStart) / 1000) % T.total;
       else scrubT = Math.min(scrubT, T.total);
       d = window.Anim.compose(previewDrawings[idx], scrubT, A, animCanvas);
@@ -537,7 +539,7 @@
       const k = window.Exporter.idealScale(frameSpec(), window.Exporter.contentBox([probe]));
       scale = Math.max(0.25, Math.min(16, k));
     }
-    const count = state.boil > 0 ? BOIL_FRAMES : 1;
+    const count = state.boil > 0 ? state.boilFrames : 1;
     const margin = animMargin();
     const drawings = [], stills = [];
     for (let f = 0; f < count; f++) {
@@ -584,8 +586,7 @@
       const spec = frameSpec();
       const cb = isFixed() ? E.contentBox(stills) : null;
       const A = animActive() ? animSettings() : null;
-      const units = A ? window.Anim.unitsOf(drawings[0], A.by).n : 1;
-      const seconds = A ? window.Anim.timing(A, units).total : state.seconds;
+      const seconds = clipSeconds(drawings[0], stills.length);
       const total = Math.max(1, Math.round(seconds * fps));
       const drawingAt = (i) => (state.boil > 0 ? Math.floor((i * state.boil) / fps) % stills.length : 0);
       const scratchC = document.createElement("canvas");
@@ -599,7 +600,24 @@
       };
       const opts = { fps, total, base, key: (i) => (A ? i : drawingAt(i)) };
       let res;
-      if (kind === "png") {
+      const onProgress = (p, label) => progress(p, label || "encoding…");
+      if (kind === "prores" || kind === "hevc") {
+        const helper = await E.helperStatus();
+        const format = kind === "prores" ? "prores4444" : "hevc-alpha";
+        if (!helper.helper) throw new Error("start the helper first: python3 server.py (see README)");
+        if (!helper.formats[format].available) {
+          throw new Error(kind === "hevc" ? "HEVC with alpha needs macOS + ffmpeg (brew install ffmpeg)" : "ffmpeg not found — brew install ffmpeg");
+        }
+        const out = await E.helperVideo(provider(null), { ...opts, format, name: base + (kind === "prores" ? "-prores4444" : "-hevc-alpha"), onProgress });
+        await deliverHelperFile(out);
+        return;
+      } else if (kind === "gif") {
+        res = await E.gif(provider(bgFor(state.bgMode)), { ...opts, onProgress: (p) => progress(p, "making GIF…") });
+      } else if (kind === "apng") {
+        res = await E.apng(provider(bgFor(state.bgMode)), { ...opts, onProgress: (p) => progress(p, "making APNG…") });
+      } else if (kind === "lottie") {
+        res = await E.lottie(provider(null), { ...opts, name: base, onProgress: (p) => progress(p, "making Lottie…") });
+      } else if (kind === "png") {
         res = { blob: await toBlob(E.composeOne(stills[0], spec, bgFor(state.bgMode), cb)), ext: "png" };
       } else if (kind === "png-seq") {
         res = await E.pngSequence(provider(null), { ...opts, onProgress: (p) => progress(p, "packing PNGs…") });
@@ -612,16 +630,73 @@
         if (!keeps && kind === "mp4-white" && lum > 0.7) toast("Heads up: light text vanishes with Multiply. Pick a dark colour, or use MP4 · black.");
         res = await E.mp4(provider(bg), { ...opts, onProgress: (p) => progress(p, "encoding MP4…") });
       }
-      const suffix = { png: "", "png-seq": "-alpha-seq", webm: "-alpha", "mp4-black": "-screen", "mp4-white": "-multiply", "mp4-green": "-greenscreen" }[kind];
-      download(res.blob, `${base}${suffix}.${res.ext}`);
+      const suffix = { png: "", "png-seq": "-alpha-seq", webm: "-alpha", "mp4-black": "-screen", "mp4-white": "-multiply",
+        "mp4-green": "-greenscreen", gif: "", apng: "-apng", lottie: "-lottie" }[kind];
+      const name = `${base}${suffix}.${res.ext}`;
       const mb = (res.blob.size / 1048576).toFixed(1);
-      toast(`Saved ${res.ext.toUpperCase()} (${mb} MB)` + (kind === "mp4-black" ? " → blend mode Screen" : kind === "mp4-white" ? " → blend mode Multiply" : ""));
+      if (await sendToAdobe(res.blob, name)) return;
+      download(res.blob, name);
+      toast(`Saved ${name} (${mb} MB)` + (kind === "mp4-black" ? " → blend mode Screen" : kind === "mp4-white" ? " → blend mode Multiply" : ""));
     } catch (e) {
       console.error(e);
       toast("Export failed: " + e.message);
     } finally {
       busy(false);
       progress(null);
+    }
+  }
+
+  /** Clip length: animation timing if animating, else the length slider (rounded to whole boil loops if seamless). */
+  function clipSeconds(drawing, drawingCount) {
+    if (animActive()) return window.Anim.totalFor(drawing, animSettings()).total;
+    if (state.seamless && state.boil > 0 && drawingCount > 1) {
+      const loop = drawingCount / state.boil;
+      return Math.max(1, Math.round(state.seconds / loop)) * loop;
+    }
+    return state.seconds;
+  }
+
+  // Running inside the Premiere Pro / After Effects panel (adobe-panel/)? Exports go straight into the project.
+  const inAdobe = new URLSearchParams(location.search).get("host") === "adobe" && window.parent !== window;
+
+  async function sendToAdobe(blob, name) {
+    if (!inAdobe) return false;
+    const helper = await window.Exporter.helperStatus();
+    if (!helper.helper) { toast("Panel needs the helper (python3 server.py) to hand files to Premiere/AE"); return false; }
+    const { path, sequence } = await window.Exporter.helperSave(blob, name);
+    window.parent.postMessage({ type: "scribble:import", path, sequence: !!sequence }, "*");
+    toast(`Imported into your project · ${name}`);
+    return true;
+  }
+
+  async function deliverHelperFile(out) {
+    const mb = (out.bytes / 1048576).toFixed(1);
+    if (inAdobe) {
+      window.parent.postMessage({ type: "scribble:import", path: out.path }, "*");
+      toast(`Imported into your project (${mb} MB)`);
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = out.file;
+    a.download = out.path.split(/[\\/]/).pop();
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(`Saved ${a.download} (${mb} MB) · also in ${out.path.replace(/[^\\/]+$/, "")}`);
+  }
+
+  async function refreshHelperCards() {
+    const h = await window.Exporter.helperStatus();
+    const set = (kind, ok, why) => {
+      const b = document.querySelector(`[data-export="${kind}"]`);
+      if (!b) return;
+      b.classList.toggle("needs-helper", !ok);
+      b.querySelector("em").textContent = ok ? b.dataset.ok : why;
+    };
+    if (!h.helper) {
+      set("prores", false, "needs the helper: python3 server.py");
+      set("hevc", false, "needs the helper on a Mac: python3 server.py");
+    } else {
+      set("prores", h.formats.prores4444.available, "helper running, but ffmpeg is missing: brew install ffmpeg");
+      set("hevc", h.formats["hevc-alpha"].available, h.platform === "darwin" ? "needs ffmpeg: brew install ffmpeg" : "Mac only (Apple VideoToolbox)");
     }
   }
 
@@ -656,7 +731,13 @@
     if (location.hash.length > 1) {
       try { Object.assign(state, pick(JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(1))))))); } catch (_) { /* bad link */ }
     }
+    loadInitialValidate();
+  }
+
+  function loadInitialValidate() {
     if (![0, 6, 8, 12].includes(state.boil)) state.boil = 8;
+    state.boilFrames = Math.max(2, Math.min(12, Math.round(state.boilFrames) || 4));
+    state.lineDelay = Math.max(0, Math.min(3, +state.lineDelay || 0));
     const legacy = { "1080p": ["16:9", 1], "4k": ["16:9", 2], vertical: ["9:16", 1], square: ["1:1", 1] };
     if (legacy[state.frame]) [state.frame, state.res] = legacy[state.frame];
     if (!(state.frame in window.Exporter.FRAMES)) state.frame = "fit";
@@ -747,7 +828,7 @@
     sel.value = state.font;
   }
 
-  const sliders = ["size", "spacing", "lineHeight", "roughness", "wobble", "seconds", "fill"];
+  const sliders = ["size", "spacing", "lineHeight", "roughness", "wobble", "seconds", "fill", "boilFrames"];
 
   function syncUI() {
     const gid = glyphId(state.font);
@@ -771,7 +852,12 @@
     $("animOut").value = state.animOut;
     $("easeIn").value = state.easeIn;
     $("easeOut").value = state.easeOut;
-    for (const k of ["inDur", "outDur", "stagger"]) { $(k).value = state[k]; $(k + "Val").textContent = state[k] + "s"; }
+    for (const k of ["inDur", "outDur", "stagger", "lineDelay"]) { $(k).value = state[k]; $(k + "Val").textContent = state[k] + "s"; }
+    $("seamless").checked = state.seamless;
+    $("boilFrames").disabled = state.boil === 0;
+    $("loopInfo").textContent = state.boil > 0
+      ? `${state.boilFrames} drawings × ${state.boil}/s = ${(state.boilFrames / state.boil).toFixed(2)}s loop · ${Math.round((state.boilFrames / state.boil) * state.fps * 100) / 100} frames @ ${state.fps}fps`
+      : "boil is off — a still image";
     $("steps").checked = state.steps;
     $("animDetails").hidden = !animActive();
     $("inDur").disabled = state.animIn === "none";
@@ -810,7 +896,8 @@
       $(k).addEventListener("input", (e) => {
         state[k] = parseFloat(e.target.value);
         $(k + "Val").textContent = state[k];
-        if (k === "seconds") persist();
+        if (k === "boilFrames") { syncUI(); schedule(); }
+        else if (k === "seconds") persist();
         else if (k === "fill") { persist(); drawPreview(performance.now(), true); }
         else schedule();
       });
@@ -942,7 +1029,7 @@
         (id === "easeIn" ? curveIn : curveOut).restart();
       });
     }
-    for (const k of ["inDur", "outDur", "stagger"]) {
+    for (const k of ["inDur", "outDur", "stagger", "lineDelay"]) {
       $(k).addEventListener("input", (e) => {
         state[k] = parseFloat(e.target.value);
         $(k + "Val").textContent = state[k] + "s";
@@ -951,6 +1038,8 @@
       $(k).addEventListener("change", restartPlayback);
     }
     $("steps").addEventListener("change", (e) => { state.steps = e.target.checked; persist(); });
+    $("seamless").addEventListener("change", (e) => { state.seamless = e.target.checked; persist(); });
+    wireMotionPresets();
 
     $("play").onclick = () => {
       playing = !playing;
@@ -966,7 +1055,7 @@
       const d = previewDrawings[0];
       if (!d) return;
       const A = animSettings();
-      const T = AN.timing(A, AN.unitsOf(d, A.by).n);
+      const T = AN.totalFor(d, A);
       scrubT = (parseFloat(e.target.value) / 1000) * T.total;
       drawPreview(performance.now(), true);
     });
@@ -985,6 +1074,80 @@
       });
     curveIn = editor("curveIn", "easeIn", "easeInBez");
     curveOut = editor("curveOut", "easeOut", "easeOutBez");
+  }
+
+  // ---------- motion presets (save / share) ----------
+  const MOTION_STORE = "scribble-studio:motion:v1";
+  const getMotion = () => { try { return JSON.parse(localStorage.getItem(MOTION_STORE) || "[]"); } catch (_) { return []; } };
+  const setMotion = (list) => { try { localStorage.setItem(MOTION_STORE, JSON.stringify(list)); } catch (_) { /* ignore */ } renderMotionPresets(); };
+  const motionOf = () => Object.fromEntries(window.Anim.MOTION_KEYS.map((k) => [k, state[k]]));
+
+  function applyMotion(m) {
+    const clean = pick(m);
+    for (const k of window.Anim.MOTION_KEYS) if (k in clean) state[k] = clean[k];
+    loadInitialValidate();
+    syncUI(); schedule(); restartPlayback();
+  }
+
+  function renderMotionPresets() {
+    const sel = $("motionPreset");
+    sel.innerHTML = '<option value="">— choose a preset —</option>';
+    const group = (label, items, prefix) => {
+      if (!items.length) return;
+      const g = document.createElement("optgroup");
+      g.label = label;
+      items.forEach(([name], i) => { const o = document.createElement("option"); o.value = prefix + i; o.textContent = name; g.appendChild(o); });
+      sel.appendChild(g);
+    };
+    group("built-in", window.Anim.PRESETS, "b");
+    group("my presets", getMotion().map((p) => [p.name, p.motion]), "m");
+  }
+
+  function wireMotionPresets() {
+    renderMotionPresets();
+    $("motionPreset").addEventListener("change", (e) => {
+      const v = e.target.value;
+      if (!v) return;
+      const src = v[0] === "b" ? window.Anim.PRESETS[+v.slice(1)][1] : getMotion()[+v.slice(1)].motion;
+      applyMotion(src);
+      toast(`Motion: ${e.target.selectedOptions[0].textContent}`);
+    });
+    $("saveMotion").onclick = () => {
+      const name = prompt("Name this motion preset:", `${window.Anim.EFFECTS[state.animIn]} → ${window.Anim.EFFECTS[state.animOut]}`);
+      if (!name) return;
+      setMotion([...getMotion(), { name: name.slice(0, 40), motion: motionOf() }]);
+      toast("Saved — it's in the preset list under “my presets”");
+    };
+    const encode = (o) => "SSM1." + btoa(unescape(encodeURIComponent(JSON.stringify(o))));
+    $("shareMotion").onclick = async () => {
+      const code = encode(motionOf());
+      try { await navigator.clipboard.writeText(code); toast("Motion code copied — send it to anyone using Scribble Studio"); }
+      catch (_) { prompt("Copy this motion code:", code); }
+    };
+    $("pasteMotion").onclick = async () => {
+      let code = "";
+      try { code = await navigator.clipboard.readText(); } catch (_) { /* permission */ }
+      if (!code || !code.startsWith("SSM1.")) code = prompt("Paste a motion code (starts with SSM1.):", "") || "";
+      try { applyMotion(JSON.parse(decodeURIComponent(escape(atob(code.trim().slice(5)))))); toast("Motion applied"); }
+      catch (_) { if (code) toast("That doesn't look like a motion code"); }
+    };
+    $("exportMotion").onclick = () => {
+      const list = getMotion();
+      if (!list.length) return toast("Save a preset first (+ save)");
+      download(new Blob([JSON.stringify({ format: "scribble-studio-motion", version: 1, presets: list }, null, 1)], { type: "application/json" }), "my-motion-presets.scribblemotion");
+    };
+    $("importMotion").onchange = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        const incoming = (data.presets || []).filter((p) => p && p.name && p.motion);
+        if (!incoming.length) throw new Error();
+        setMotion([...getMotion(), ...incoming]);
+        toast(`Imported ${incoming.length} motion preset(s)`);
+      } catch (_) { toast("Couldn't read that preset file"); }
+    };
   }
 
   // ---------- font builder (keyboard of PNG letters) ----------
@@ -1260,6 +1423,7 @@
   syncUI();
   renderPresets();
   requestAnimationFrame(loop);
+  refreshHelperCards();
   GF.init().then(() => {
     refreshFontOptions();
     validateFont();

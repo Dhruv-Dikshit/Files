@@ -123,8 +123,34 @@
         <button class="btn small light" id="reseed" title="New random hand-drawn variation">🎲</button>
       </div>
     </div>
+    <div class="row">
+      <div class="panel ctrl">
+        <span class="lbl">boil frames</span>
+        <input type="range" id="boilFrames" min="2" max="12" step="1" value="4" aria-label="Number of redrawn boil frames" />
+        <output class="val" id="boilFramesVal">4</output>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">loop</span>
+        <span class="loop-info" id="loopInfo">4 drawings · 0.5s loop</span>
+        <label class="chk-inline" title="Round the export length to whole boil loops so it repeats without a jump">
+          <input type="checkbox" id="seamless" checked /> seamless
+        </label>
+      </div>
+    </div>
 
     <h2 class="section-title">animate in &amp; out</h2>
+
+    <div class="row">
+      <div class="panel ctrl wide">
+        <span class="lbl">motion preset</span>
+        <select id="motionPreset" class="sel wide-sel" aria-label="Motion preset"></select>
+        <button class="btn small light" id="saveMotion" title="Save the current in/out settings as a preset">+ save</button>
+        <button class="btn small light" id="shareMotion" title="Copy a share code for these motion settings">copy code</button>
+        <button class="btn small light" id="pasteMotion" title="Apply a motion share code">paste code</button>
+        <button class="btn small light" id="exportMotion" title="Download your saved presets as a .scribblemotion file">⬇</button>
+        <label class="btn small light" title="Import a .scribblemotion file">⬆<input id="importMotion" type="file" accept=".scribblemotion,.json" hidden /></label>
+      </div>
+    </div>
 
     <div class="row">
       <div class="panel ctrl">
@@ -147,6 +173,7 @@
           <span class="lbl">animate by</span>
           <div class="seg" data-key="animBy">
             <button data-v="all">whole</button>
+            <button data-v="line">line</button>
             <button data-v="word">word</button>
             <button data-v="letter" class="on">letter</button>
           </div>
@@ -155,6 +182,11 @@
           <span class="lbl">stagger</span>
           <input type="range" id="stagger" min="0" max="0.5" step="0.01" value="0.05" aria-label="Stagger between letters/words" />
           <output class="val" id="staggerVal">0.05s</output>
+        </div>
+        <div class="panel ctrl">
+          <span class="lbl">line delay</span>
+          <input type="range" id="lineDelay" min="0" max="3" step="0.05" value="0" aria-label="Delay between lines" />
+          <output class="val" id="lineDelayVal">0s</output>
         </div>
         <div class="panel ctrl">
           <span class="lbl">order</span>
@@ -299,6 +331,26 @@
         <b>WebM · alpha</b><span>transparent video</span>
         <em>Resolve & AE (not Premiere) · Chrome only</em>
       </button>
+      <button class="export-card pro" data-export="prores" data-ok="ProRes 4444 · one transparent file · via helper">
+        <b>ProRes 4444</b><span>.mov with alpha</span>
+        <em>ProRes 4444 · one transparent file · via helper</em>
+      </button>
+      <button class="export-card pro" data-export="hevc" data-ok="small transparent .mov · Final Cut, Apple devices">
+        <b>HEVC · alpha</b><span>.mov with alpha (Mac)</span>
+        <em>small transparent .mov · Final Cut, Apple devices</em>
+      </button>
+      <button class="export-card" data-export="gif">
+        <b>GIF</b><span>animated · loops</span>
+        <em>uses preview bg (none = transparent) · max 720px</em>
+      </button>
+      <button class="export-card" data-export="apng">
+        <b>APNG</b><span>animated PNG · full alpha</span>
+        <em>smooth edges · web, Discord, Telegram</em>
+      </button>
+      <button class="export-card" data-export="lottie">
+        <b>Lottie</b><span>.json for apps & web</span>
+        <em>LottieFiles, After Effects, iOS/Android</em>
+      </button>
       <button class="export-card" data-export="png">
         <b>PNG still</b><span>transparent · ⌘S</span>
         <em>thumbnails, Figma, Keynote</em>
@@ -385,6 +437,7 @@
   <div id="toast" role="status" aria-live="polite"></div>
 
   <script src="vendor/mp4-muxer.js"></script>
+  <script src="vendor/gifenc.js"></script>
   <script src="glyphfonts.js"></script>
   <script src="exporter.js"></script>
   <script src="anim.js"></script>

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Scribble Studio</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #f3f2ee; font: 13px system-ui, sans-serif; color: #222; }
+    iframe { border: 0; width: 100%; height: 100%; display: block; }
+    #offline { display: none; padding: 24px; line-height: 1.5; }
+    #offline code { background: #fff; padding: 2px 6px; border-radius: 4px; }
+    #offline button { margin-top: 12px; padding: 8px 14px; border: 0; border-radius: 6px; background: #4b5bd6; color: #fff; cursor: pointer; }
+    #bar { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); background: #222; color: #fff;
+           padding: 6px 12px; border-radius: 6px; display: none; }
+  </style>
+</head>
+<body>
+  <div id="offline">
+    <h2>Scribble Studio isn't running</h2>
+    <p>Start the helper on this Mac, then press retry:</p>
+    <p><code>cd ~/files/scribble-studio &amp;&amp; python3 server.py</code></p>
+    <p>(or open <b>Scribble Studio.app</b> if you made one with <code>mac/make-app.sh</code>)</p>
+    <button id="retry">retry</button>
+  </div>
+  <iframe id="app" title="Scribble Studio"></iframe>
+  <div id="bar"></div>
+
+  <script>
+    // The panel hosts the real app (served by server.py) and imports finished exports into the open project.
+    var URL_BASE = "http://localhost:8000/";
+    var frame = document.getElementById("app");
+    var offline = document.getElementById("offline");
+    var bar = document.getElementById("bar");
+
+    function say(msg) {
+      bar.textContent = msg;
+      bar.style.display = "block";
+      clearTimeout(say.t);
+      say.t = setTimeout(function () { bar.style.display = "none"; }, 3500);
+    }
+
+    function connect() {
+      fetch(URL_BASE + "api/status", { cache: "no-store" })
+        .then(function (r) { return r.json(); })
+        .then(function () {
+          offline.style.display = "none";
+          frame.style.display = "block";
+          frame.src = URL_BASE + "?host=adobe";
+        })
+        .catch(function () {
+          frame.style.display = "none";
+          offline.style.display = "block";
+        });
+    }
+    document.getElementById("retry").onclick = connect;
+
+    window.addEventListener("message", function (e) {
+      if (e.origin.indexOf("http://localhost") !== 0 && e.origin.indexOf("http://127.0.0.1") !== 0) return;
+      var d = e.data || {};
+      if (d.type !== "scribble:import" || typeof d.path !== "string") return;
+      var script = "scribbleImport(" + JSON.stringify(d.path) + "," + (d.sequence ? "true" : "false") + ")";
+      if (!window.__adobe_cep__) { say("Not running inside Premiere/After Effects"); return; }
+      window.__adobe_cep__.evalScript(script, function (res) {
+        say(res && res.indexOf("ok") === 0 ? "Imported ✓ " + res.slice(3) : "Import failed: " + res);
+      });
+    });
+
+    connect();
+  </script>
+</body>
+</html>

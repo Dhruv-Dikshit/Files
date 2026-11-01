@@ -326,5 +326,174 @@ FINAL CUT PRO
 Made with Scribble Studio.
 `;
 
-  return { compose, composeOne, mp4, webm, pngSequence, FRAMES, SAFE, frameSize, safeBox, contentBox, placement, idealScale };
+  // ---------- animated images: GIF / APNG / Lottie ----------
+  /** Wraps a provider so frames are at most `maxSide` px (animated images get huge otherwise). */
+  function limitSize(provider, maxSide) {
+    const first = provider(0);
+    const s = Math.min(1, maxSide / Math.max(first.width, first.height));
+    if (s >= 1) return { provider, W: first.width, H: first.height };
+    const o = document.createElement("canvas");
+    o.width = Math.max(1, Math.round(first.width * s)); o.height = Math.max(1, Math.round(first.height * s));
+    const ctx = o.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    return { W: o.width, H: o.height, provider: (i) => { ctx.clearRect(0, 0, o.width, o.height); ctx.drawImage(provider(i), 0, 0, o.width, o.height); return o; } };
+  }
+
+  /** Groups consecutive identical frames (same key) so held drawings become one longer frame. */
+  function runs(total, key) {
+    const out = [];
+    for (let i = 0; i < total; i++) {
+      const k = key ? key(i) : i;
+      const last = out[out.length - 1];
+      if (last && last.key === k) last.len++;
+      else out.push({ key: k, start: i, len: 1 });
+    }
+    return out;
+  }
+
+  const yieldUI = () => new Promise((r) => setTimeout(r, 0));
+
+  async function gif(rawProvider, { fps, total, key, maxSide = 720, onProgress }) {
+    const G = window.gifenc;
+    if (!G) throw new Error("GIF encoder missing");
+    const { provider, W, H } = limitSize(rawProvider, maxSide);
+    const enc = G.GIFEncoder();
+    const rs = runs(total, key);
+    let carry = 0; // GIF delays are in 1/100 s — carry rounding error so timing stays exact
+    for (let r = 0; r < rs.length; r++) {
+      const c = provider(rs[r].start);
+      const rgba = c.getContext("2d").getImageData(0, 0, W, H).data;
+      const palette = G.quantize(rgba, 256, { format: "rgba4444", oneBitAlpha: true, clearAlpha: true, clearAlphaThreshold: 100 });
+      const index = G.applyPalette(rgba, palette, "rgba4444");
+      const ti = palette.findIndex((p) => p[3] === 0);
+      const exact = (rs[r].len * 100) / fps + carry;
+      const cs = Math.max(2, Math.round(exact));
+      carry = exact - cs;
+      enc.writeFrame(index, W, H, { palette, delay: cs * 10, transparent: ti >= 0, transparentIndex: Math.max(0, ti), dispose: 2, repeat: 0 });
+      onProgress && onProgress(r / rs.length);
+      if (r % 3 === 0) await yieldUI();
+    }
+    enc.finish();
+    return { blob: new Blob([enc.bytes()], { type: "image/gif" }), ext: "gif" };
+  }
+
+  // PNG chunk helpers for APNG
+  function pngChunks(u8) {
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const chunks = [];
+    for (let o = 8; o < u8.length;) {
+      const len = dv.getUint32(o);
+      const type = String.fromCharCode(u8[o + 4], u8[o + 5], u8[o + 6], u8[o + 7]);
+      chunks.push({ type, data: u8.subarray(o + 8, o + 8 + len) });
+      o += 12 + len;
+    }
+    return chunks;
+  }
+  function chunk(type, data) {
+    const out = new Uint8Array(12 + data.length);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, data.length);
+    for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+    out.set(data, 8);
+    dv.setUint32(8 + data.length, crc32(out.subarray(4, 8 + data.length)));
+    return out;
+  }
+  const u32 = (n) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n); return b; };
+  const cat = (...arrs) => { const n = arrs.reduce((s, a) => s + a.length, 0); const o = new Uint8Array(n); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; };
+
+  async function apng(rawProvider, { fps, total, key, maxSide = 1080, onProgress }) {
+    const { provider, W, H } = limitSize(rawProvider, maxSide);
+    const rs = runs(total, key);
+    const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])];
+    let seq = 0;
+    for (let r = 0; r < rs.length; r++) {
+      const blob = await new Promise((res) => provider(rs[r].start).toBlob(res, "image/png"));
+      const chunks = pngChunks(new Uint8Array(await blob.arrayBuffer()));
+      if (r === 0) {
+        parts.push(chunk("IHDR", chunks.find((c) => c.type === "IHDR").data));
+        parts.push(chunk("acTL", cat(u32(rs.length), u32(0)))); // loop forever
+      }
+      const fc = new Uint8Array(26);
+      const dv = new DataView(fc.buffer);
+      dv.setUint32(0, seq++); dv.setUint32(4, W); dv.setUint32(8, H); dv.setUint32(12, 0); dv.setUint32(16, 0);
+      dv.setUint16(20, rs[r].len); dv.setUint16(22, fps); fc[24] = 1; fc[25] = 0; // dispose: clear, blend: source
+      parts.push(chunk("fcTL", fc));
+      for (const c of chunks.filter((c) => c.type === "IDAT")) {
+        parts.push(r === 0 ? chunk("IDAT", c.data) : chunk("fdAT", cat(u32(seq++), c.data)));
+      }
+      onProgress && onProgress(r / rs.length);
+      if (r % 3 === 0) await yieldUI();
+    }
+    parts.push(chunk("IEND", new Uint8Array(0)));
+    return { blob: new Blob(parts, { type: "image/apng" }), ext: "png" };
+  }
+
+  /** Lottie JSON: each distinct drawing is an embedded PNG asset, shown by timed image layers. */
+  async function lottie(rawProvider, { fps, total, key, maxSide = 720, name, onProgress }) {
+    const { provider, W, H } = limitSize(rawProvider, maxSide);
+    const rs = runs(total, key);
+    const assets = new Map();
+    const layers = [];
+    for (let r = 0; r < rs.length; r++) {
+      const k = String(rs[r].key);
+      if (!assets.has(k)) {
+        const url = provider(rs[r].start).toDataURL("image/png");
+        assets.set(k, { id: "img_" + assets.size, w: W, h: H, u: "", p: url, e: 1 });
+      }
+      layers.push({
+        ddd: 0, ind: layers.length + 1, ty: 2, nm: `frame ${rs[r].start}`, refId: assets.get(k).id, sr: 1,
+        ks: { o: { a: 0, k: 100 }, r: { a: 0, k: 0 }, p: { a: 0, k: [W / 2, H / 2, 0] }, a: { a: 0, k: [W / 2, H / 2, 0] }, s: { a: 0, k: [100, 100, 100] } },
+        ao: 0, ip: rs[r].start, op: rs[r].start + rs[r].len, st: 0, bm: 0,
+      });
+      onProgress && onProgress(r / rs.length);
+      if (r % 5 === 0) await yieldUI();
+    }
+    const json = { v: "5.7.4", fr: fps, ip: 0, op: total, w: W, h: H, nm: name || "scribble", ddd: 0, assets: [...assets.values()], layers, markers: [] };
+    return { blob: new Blob([JSON.stringify(json)], { type: "application/json" }), ext: "json" };
+  }
+
+  // ---------- local helper (server.py): ProRes 4444 / HEVC alpha via ffmpeg ----------
+  let helperInfo = null;
+  async function helperStatus() {
+    if (helperInfo) return helperInfo;
+    try {
+      const r = await fetch("api/status", { cache: "no-store" });
+      helperInfo = r.ok ? await r.json() : { helper: false };
+    } catch (_) { helperInfo = { helper: false }; }
+    return helperInfo;
+  }
+
+  async function postJSON(url, body, raw) {
+    const r = await fetch(url, { method: "POST", body: raw ? body : JSON.stringify(body), headers: raw ? { "Content-Type": "image/png" } : { "Content-Type": "application/json" } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error ? j.error + (j.detail ? ": " + j.detail.split("\n").slice(-2).join(" ") : "") : "helper error " + r.status);
+    return j;
+  }
+
+  /** Uploads unique PNG frames to the helper, which runs ffmpeg. Returns { path, file (download url) }. */
+  async function helperVideo(provider, { fps, total, key, format, name, onProgress }) {
+    const { id } = await postJSON("api/job", {});
+    const sent = new Set();
+    const order = [];
+    for (let i = 0; i < total; i++) {
+      const k = String(key ? key(i) : i).replace(/[^A-Za-z0-9_-]/g, "_");
+      order.push(k);
+      if (!sent.has(k)) {
+        const blob = await new Promise((res) => provider(i).toBlob(res, "image/png"));
+        await postJSON(`api/job/${id}/frame/${k}`, blob, true);
+        sent.add(k);
+      }
+      if (i % 4 === 0) onProgress && onProgress((i / total) * 0.8, "sending frames…");
+    }
+    onProgress && onProgress(0.85, "ffmpeg is encoding…");
+    return postJSON(`api/job/${id}/finish`, { format, fps, order, name });
+  }
+
+  async function helperSave(blob, filename) {
+    const r = await fetch("api/save", { method: "POST", body: blob, headers: { "X-Filename": filename } });
+    if (!r.ok) throw new Error("couldn't save via helper");
+    return r.json();
+  }
+
+  return { compose, composeOne, gif, apng, lottie, helperStatus, helperVideo, helperSave, mp4, webm, pngSequence, FRAMES, SAFE, frameSize, safeBox, contentBox, placement, idealScale };
 })();

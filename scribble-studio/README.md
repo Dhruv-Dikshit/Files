@@ -8,10 +8,30 @@ It's plain HTML, CSS and JS with no build step and no backend, and everything re
 
 ```bash
 cd scribble-studio
-python3 -m http.server 8000
+python3 server.py
 ```
 
-Then open http://localhost:8000. You can also double-click `index.html`, but uploading fonts and copying to the clipboard work better over http.
+Then open http://localhost:8000. `server.py` is the **local helper**. It serves the app and adds the pro exports (ProRes 4444 / HEVC alpha) using ffmpeg. Install ffmpeg once with `brew install ffmpeg`. It only listens on your own computer, and exports are also saved to `~/Movies/Scribble Studio`.
+
+`python3 -m http.server 8000` still works too. You just won't get the ProRes/HEVC cards or the Adobe panel import.
+
+### As a Mac app
+
+```bash
+bash mac/make-app.sh
+```
+
+This builds **~/Applications/Scribble Studio.app**. Double-click it (the first time, right-click → Open, because it isn't notarised). It starts the helper in the background and opens the app in its own Chrome/Edge window, or your default browser. Logs go to `~/Library/Logs/scribble-studio.log`.
+
+### Inside Premiere Pro / After Effects
+
+```bash
+bash adobe-panel/install.sh
+```
+
+Start the helper (or the Mac app), then restart Premiere/AE → **Window → Extensions → Scribble Studio**. The full app runs in a panel. Every export is **imported straight into your project**, into a "Scribble Studio" bin in Premiere, or into a folder and the active comp in After Effects. PNG sequences come in as one image-sequence clip. ProRes 4444 is the best choice in the panel.
+
+The panel is unsigned, so the installer turns on Adobe's `PlayerDebugMode` for CEP 9–12. Unsigned panels need that.
 
 ## What it does today
 
@@ -21,8 +41,8 @@ Then open http://localhost:8000. You can also double-click `index.html`, but upl
 | Fonts | 13 open-source handwritten Google Fonts, **upload a .ttf/.otf** (remembered on this device), and **build your own font from PNG drawings** (below) |
 | Look | Thickness (thin/regular/bold/heavy), fill / outline / drop-shadow / crayon grain, colour swatches + hex |
 | Hand-drawn feel | **Roughness** (edges that look drawn with a marker), **wobble** (each letter gets its own small rotation, scale and offset), **🎲 reshuffle** (a new random variation) |
-| Animation | **Line boil**: 4 redrawn frames at 6 / 8 / 12 drawings per second (on 4s, 3s or 2s at 24 fps) |
-| Editor exports | PNG sequence with alpha, MP4 on black / white / green, WebM with alpha, PNG still. You can set the frame (fit text, **9:16** Reels/Shorts/TikTok, **4:5** IG feed, **3:4** IG grid, 1:1, 16:9) in HD or 4K, the fps (24/25/30/60) and the length |
+| Animation | **Line boil**: 2–12 redrawn frames at 6 / 8 / 12 drawings per second (on 4s, 3s or 2s at 24 fps). The loop length readout and the **seamless** option round exports to whole loops |
+| Editor exports | **ProRes 4444** and **HEVC with alpha** (via the helper), PNG sequence with alpha, MP4 on black / white / green, WebM with alpha, **GIF**, **APNG**, **Lottie**, PNG still. You can set the frame (fit text, **9:16** Reels/Shorts/TikTok, **4:5** IG feed, **3:4** IG grid, 1:1, 16:9) in HD or 4K, the fps (24/25/30/60) and the length |
 | Workflow | Settings are remembered, named presets, a style link, ⌘S saves a PNG |
 
 ## Build your own font from Procreate drawings
@@ -61,9 +81,12 @@ Pick an **in** and an **out** animation, each with its own duration (**0.2 s –
 | Flicker | Random on/off like a dodgy neon sign, settling on |
 | Motion blur | Whooshes in sideways with real motion-blur streaks |
 | Typewriter | Letters pop on one at a time (use *letter* + some stagger) |
+| Write on (pen strokes) | **Draws each letter stroke by stroke along its pen path.** Each glyph is thinned to a skeleton, the strokes are traced from the top-left, and the ink is revealed in that order. It works on your drawn PNG fonts too |
 | Write on (wipe) | Reveals left to right as if being written |
 
-- **Animate by** the whole text, word by word or letter by letter. **Stagger** sets the delay between units (0–0.5 s). **Order** goes first→last, last→first, from the centre outwards, or random.
+- **Animate by** the whole text, line by line, word by word or letter by letter. **Line delay** (0–3 s) adds per-line timing: each line starts after the one above.
+- **Motion presets**: 10 built-in looks (Pop up, Handwritten, Signature, Neon sign, Soft focus, Whoosh, Typewriter, Bouncy grow, Line by line, Stop-motion drop). Use **+ save** to keep your own. **copy code / paste code** shares a look as a short `SSM1.…` code, and ⬇ / ⬆ export and import all your presets as a `.scribblemotion` file.
+- **Stagger** sets the delay between units (0–0.5 s). **Order** goes first→last, last→first, from the centre outwards, or random.
 - **Motion curves**: separate easing for in and out. The presets are Linear, Ease, Sine, Quad, Cubic, Quart, Expo, Circ, Back (overshoot / anticipate), Elastic, Bounce, and Stepped (stop-motion). You can also **drag the yellow handles** on the graph to make a custom `cubic-bezier`. The value is shown under the graph so you can copy it into CSS or match it in After Effects. A pink dot runs along the curve so you can feel the timing.
 - **Timeline**: play / pause (space bar) and scrub. Green is the in section, pink is the out section. **On 2s** holds every pose for 2 frames for that hand-made feel.
 - The clip length comes from the **length** slider. It's stretched automatically if in + stagger + out need more time.
@@ -91,11 +114,16 @@ Under the hood every letter is pre-rendered as a sprite with roughness and the o
 
 | Export | Use it like this |
 |---|---|
+| **ProRes 4444 (.mov)** | One file with real transparency. Drop it on a track in Premiere, Final Cut, Resolve or AE. Needs the helper and ffmpeg |
+| **HEVC with alpha (.mov)** | Much smaller transparent file for Final Cut and Apple devices. Needs the helper and ffmpeg **on a Mac** (Apple VideoToolbox) |
 | **PNG sequence (.zip)** | Real transparency, so just put it on the track above. Premiere: Import → tick *Image Sequence*. AE: tick *PNG Sequence*. Resolve reads the folder as one clip. A how-to file is in the zip |
 | **MP4 · black** | Blend mode **Screen** (or Add / Linear Dodge). Best with light or bright text. Works everywhere, including Final Cut |
 | **MP4 · white** | Blend mode **Multiply**. Best with dark text, like ink on paper |
 | **MP4 · green** | Ultra Key / Keylight / 3D Keyer |
 | **WebM · alpha** | Transparent video for Resolve / AE. Chrome only; Premiere can't read it |
+| **GIF** | Loops forever, max 720 px. Uses the preview background (none = transparent, with hard 1-bit edges) |
+| **APNG** | Animated PNG with smooth full alpha, max 1080 px. Works on the web, Discord, Telegram and in Keynote |
+| **Lottie (.json)** | For LottieFiles, websites and iOS/Android apps. Frames are embedded PNGs, and held drawings are merged |
 
 Where the blend mode setting is:
 - Premiere: Effect Controls → Opacity → Blend Mode.
@@ -124,12 +152,8 @@ The web version runs as-is. To get a native `.app`:
 ## Roadmap: ideas that would beat the original
 
 **For video editors (the core audience)**
-- **ProRes 4444 / HEVC-with-alpha** (needs the native Mac app wrapper) for a single transparent video file.
-- **Animated GIF / APNG / Lottie** export.
-- **True stroke-by-stroke write-on** (follow the pen path of each drawn letter instead of a wipe).
-- Keyframe presets you can save and share, and per-line timing.
-- Set the **loop length and frame count** (2–12 boil frames) and the export frame rate (24/25/30/60).
-- **Final Cut / Premiere plugin** or a Motion template that wraps the renderer.
+- A native **FxPlug plugin for Final Cut / Motion** (needs Xcode and Swift; for now, export ProRes 4444 and drop it in).
+- Lottie with real per-letter vector keyframes instead of embedded frames.
 
 **More creative control**
 - Export a drawn font as a real **.otf** (trace the PNGs into vectors) so it works in Word, Figma and Premiere's text tool.
