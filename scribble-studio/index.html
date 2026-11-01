@@ -127,16 +127,44 @@
     <h2 class="section-title">export for your editor</h2>
 
     <div class="row">
-      <div class="panel ctrl">
+      <div class="panel ctrl wide">
         <span class="lbl">frame</span>
-        <div class="seg" data-key="frame">
-          <button data-v="fit" class="on">fit text</button>
-          <button data-v="1080p">1080p</button>
-          <button data-v="4k">4k</button>
-          <button data-v="vertical">9:16</button>
-          <button data-v="square">1:1</button>
+        <div class="seg frames" data-key="frame">
+          <button data-v="fit" class="on" title="Canvas hugs the text — best for placing it freely in your edit">fit text<small>overlay</small></button>
+          <button data-v="9:16" title="1080×1920 · Reels, Shorts, TikTok, Stories">9:16<small>reels · shorts · tiktok</small></button>
+          <button data-v="4:5" title="1080×1350 · Instagram & Facebook feed">4:5<small>ig feed</small></button>
+          <button data-v="3:4" title="1080×1440 · Instagram grid, Threads">3:4<small>ig grid</small></button>
+          <button data-v="1:1" title="1080×1080">1:1<small>square</small></button>
+          <button data-v="16:9" title="1920×1080 · YouTube, regular edits">16:9<small>youtube</small></button>
         </div>
       </div>
+    </div>
+    <div class="row" id="frameOpts" hidden>
+      <div class="panel ctrl">
+        <span class="lbl">position</span>
+        <div class="seg" data-key="place">
+          <button data-v="top">top</button>
+          <button data-v="center" class="on">center</button>
+          <button data-v="bottom">lower</button>
+        </div>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">text width</span>
+        <input type="range" id="fill" min="25" max="100" step="1" value="70" />
+        <output class="val" id="fillVal">70</output>
+      </div>
+      <div class="panel ctrl">
+        <span class="lbl">quality</span>
+        <div class="seg" data-key="res">
+          <button data-v="1" class="on" title="1080 wide — what Instagram/TikTok actually serve">hd</button>
+          <button data-v="2" title="2160×3840 for 9:16, 3840×2160 for 16:9">4k</button>
+        </div>
+        <label class="chk-inline" title="Show where app buttons & captions cover your video (never exported)">
+          <input type="checkbox" id="guides" checked /> safe zones
+        </label>
+      </div>
+    </div>
+    <div class="row">
       <div class="panel ctrl">
         <span class="lbl">fps</span>
         <div class="seg" data-key="fps">
@@ -153,7 +181,7 @@
       </div>
     </div>
     <div class="row">
-      <div class="panel ctrl">
+      <div class="panel ctrl" id="detailCtrl">
         <span class="lbl">detail</span>
         <div class="seg" data-key="scale" title="Render resolution of the lettering (fit-text frame size depends on this)">
           <button data-v="1">1x</button>

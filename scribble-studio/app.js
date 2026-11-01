@@ -42,6 +42,10 @@
     bgColor: "#ffffff",
     scale: 2,
     frame: "fit",
+    place: "center",
+    fill: 70,
+    res: 1,
+    guides: true,
     fps: 24,
     seconds: 5,
     seed: 1,
@@ -327,14 +331,39 @@
       if (token !== renderToken) return;
     }
     previewFrames = frames;
-    preview.width = frames[0].width;
-    preview.height = frames[0].height;
-    preview.style.width = frames[0].width / dpr + "px";
-    preview.style.height = "auto";
-    drawPreview(performance.now(), true);
+    previewCB = null;
+    layoutPreview();
   }
 
   const bgFor = (mode) => (mode === "solid" ? state.bgColor : BG[mode] ?? null);
+  const frameSpec = () => ({ frame: state.frame, res: state.res, place: state.place, fill: state.fill });
+  const isFixed = () => state.frame !== "fit";
+  let previewCB = null;
+
+  /** Sizes the preview canvas: hugging the text, or a scaled-down mock of the chosen frame. */
+  function layoutPreview() {
+    if (!previewFrames.length) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (!isFixed()) {
+      const f = previewFrames[0];
+      preview.width = f.width;
+      preview.height = f.height;
+      preview.style.width = f.width / dpr + "px";
+    } else {
+      const [W, H] = window.Exporter.frameSize(frameSpec(), previewFrames[0]);
+      const maxW = Math.min(1000, document.getElementById("stage").clientWidth || 1000);
+      let cssH = Math.min(560, window.innerHeight * 0.5);
+      let cssW = (cssH * W) / H;
+      if (cssW > maxW) { cssW = maxW; cssH = (cssW * H) / W; }
+      preview.width = Math.round(cssW * dpr);
+      preview.height = Math.round(cssH * dpr);
+      preview.style.width = cssW + "px";
+      if (!previewCB) previewCB = window.Exporter.contentBox(previewFrames);
+    }
+    preview.style.height = "auto";
+    preview.classList.toggle("framed", isFixed());
+    drawPreview(performance.now(), true);
+  }
 
   let lastIdx = -1;
   function drawPreview(t, force) {
@@ -345,7 +374,49 @@
     pctx.clearRect(0, 0, preview.width, preview.height);
     const bg = bgFor(state.bgMode);
     if (bg) { pctx.fillStyle = bg; pctx.fillRect(0, 0, preview.width, preview.height); }
-    pctx.drawImage(previewFrames[idx], 0, 0);
+    const d = previewFrames[idx];
+    if (!isFixed()) { pctx.drawImage(d, 0, 0); return; }
+
+    const E = window.Exporter;
+    const spec = frameSpec();
+    const [W, H] = E.frameSize(spec, d);
+    const q = preview.width / W;
+    const p = E.placement(spec, W, H, d, previewCB || E.contentBox([d]));
+    pctx.imageSmoothingQuality = "high";
+    pctx.drawImage(d, p.x * q, p.y * q, d.width * p.s * q, d.height * p.s * q);
+    if (state.guides) drawGuides(spec, W, H, q);
+  }
+
+  /** Safe-zone overlay (preview only — never exported). */
+  function drawGuides(spec, W, H, q) {
+    const sb = window.Exporter.safeBox(spec, W, H);
+    const x = sb.x * q, y = sb.y * q, w = sb.w * q, h = sb.h * q;
+    const PW = preview.width, PH = preview.height;
+    pctx.save();
+    pctx.fillStyle = "rgba(229, 72, 77, 0.10)";
+    pctx.fillRect(0, 0, PW, y);
+    pctx.fillRect(0, y + h, PW, PH - y - h);
+    pctx.fillRect(0, y, x, h);
+    pctx.fillRect(x + w, y, PW - x - w, h);
+    pctx.strokeStyle = "rgba(229, 72, 77, 0.8)";
+    pctx.lineWidth = Math.max(1, PW / 400);
+    pctx.setLineDash([6 * (PW / 400), 5 * (PW / 400)]);
+    pctx.strokeRect(x, y, w, h);
+    pctx.setLineDash([]);
+    if (spec.frame === "9:16") {
+      const fs = Math.max(9, PW / 26);
+      pctx.font = `600 ${fs}px system-ui, sans-serif`;
+      pctx.fillStyle = "rgba(190, 40, 50, 0.85)";
+      pctx.textAlign = "center";
+      pctx.fillText("caption · @handle · audio", x + w / 2, y + h + (PH - y - h) / 2);
+      pctx.fillText("header", PW / 2, y / 2 + fs / 3);
+      pctx.save();
+      pctx.translate(x + w + (PW - x - w) / 2, y + h * 0.75);
+      pctx.rotate(-Math.PI / 2);
+      pctx.fillText("♥ 💬 ↗ buttons", 0, fs / 3);
+      pctx.restore();
+    }
+    pctx.restore();
   }
 
   function loop(t) {
@@ -376,11 +447,18 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
 
+  /** Renders the boil drawings. For fixed frames the scale is chosen so the ink lands 1:1 (sharp). */
   async function exportDrawings() {
     await ensureFont();
+    let scale = state.scale;
+    if (isFixed()) {
+      const probe = renderFrame(1, 0);
+      const k = window.Exporter.idealScale(frameSpec(), window.Exporter.contentBox([probe]));
+      scale = Math.max(0.25, Math.min(16, k));
+    }
     const count = state.boil > 0 ? BOIL_FRAMES : 1;
     const out = [];
-    for (let f = 0; f < count; f++) { out.push(renderFrame(state.scale, f)); await tick(); }
+    for (let f = 0; f < count; f++) { out.push(renderFrame(scale, f)); await tick(); }
     return out;
   }
 
@@ -406,7 +484,8 @@
 
   async function runExport(kind) {
     const E = window.Exporter;
-    const opts = { fps: state.fps, boil: state.boil, seconds: state.seconds, base: slug() };
+    const tag = isFixed() ? "-" + state.frame.replace(":", "x") : "";
+    const opts = { fps: state.fps, boil: state.boil, seconds: state.seconds, base: slug() + tag };
     const lum = luminance(state.color);
     const gid = glyphId(state.font);
     const keeps = gid && GF.get(gid) && GF.get(gid).rec.keepColors;
@@ -416,18 +495,18 @@
       const drawings = await exportDrawings();
       let res;
       if (kind === "png") {
-        const [c] = E.compose(drawings.slice(0, 1), state.frame, bgFor(state.bgMode));
+        const [c] = E.compose(drawings.slice(0, 1), frameSpec(), bgFor(state.bgMode));
         res = { blob: await toBlob(c), ext: "png" };
       } else if (kind === "png-seq") {
-        res = await E.pngSequence(E.compose(drawings, state.frame, null), { ...opts, onProgress: (p) => progress(p, "packing PNGs…") });
+        res = await E.pngSequence(E.compose(drawings, frameSpec(), null), { ...opts, onProgress: (p) => progress(p, "packing PNGs…") });
       } else if (kind === "webm") {
         progress(0.5, "recording in real time…");
-        res = await E.webm(E.compose(drawings, state.frame, null), opts);
+        res = await E.webm(E.compose(drawings, frameSpec(), null), opts);
       } else {
         const bg = { "mp4-black": "#000000", "mp4-white": "#ffffff", "mp4-green": "#00b140" }[kind];
         if (!keeps && kind === "mp4-black" && lum < 0.18) toast("Heads up: dark text vanishes with Screen. Pick a light colour, or use MP4 · white.");
         if (!keeps && kind === "mp4-white" && lum > 0.7) toast("Heads up: light text vanishes with Multiply. Pick a dark colour, or use MP4 · black.");
-        res = await E.mp4(E.compose(drawings, state.frame, bg), { ...opts, onProgress: (p) => progress(p, "encoding MP4…") });
+        res = await E.mp4(E.compose(drawings, frameSpec(), bg), { ...opts, onProgress: (p) => progress(p, "encoding MP4…") });
       }
       const suffix = { png: "", "png-seq": "-alpha-seq", webm: "-alpha", "mp4-black": "-screen", "mp4-white": "-multiply", "mp4-green": "-greenscreen" }[kind];
       download(res.blob, `${opts.base}${suffix}.${res.ext}`);
@@ -474,6 +553,9 @@
       try { Object.assign(state, pick(JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(1))))))); } catch (_) { /* bad link */ }
     }
     if (![0, 6, 8, 12].includes(state.boil)) state.boil = 8;
+    const legacy = { "1080p": ["16:9", 1], "4k": ["16:9", 2], vertical: ["9:16", 1], square: ["1:1", 1] };
+    if (legacy[state.frame]) [state.frame, state.res] = legacy[state.frame];
+    if (!(state.frame in window.Exporter.FRAMES)) state.frame = "fit";
     if (!(state.bgMode in BG) && state.bgMode !== "solid") state.bgMode = "transparent";
   }
 
@@ -553,7 +635,7 @@
     sel.value = state.font;
   }
 
-  const sliders = ["size", "spacing", "lineHeight", "roughness", "wobble", "seconds"];
+  const sliders = ["size", "spacing", "lineHeight", "roughness", "wobble", "seconds", "fill"];
 
   function syncUI() {
     const gid = glyphId(state.font);
@@ -569,6 +651,9 @@
     $("shadowOffset").value = state.shadowOffset;
     $("bgColor").value = state.bgColor;
     $("shadowCtrl").hidden = state.style !== "shadow";
+    $("frameOpts").hidden = !isFixed();
+    $("detailCtrl").hidden = isFixed(); // fixed frames pick the sharpest scale automatically
+    $("guides").checked = state.guides;
     document.querySelectorAll(".seg").forEach((seg) => {
       const key = seg.dataset.key;
       seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === String(state[key])));
@@ -601,11 +686,14 @@
       $(k).addEventListener("input", (e) => {
         state[k] = parseFloat(e.target.value);
         $(k + "Val").textContent = state[k];
-        if (k === "seconds") persist(); else schedule();
+        if (k === "seconds") persist();
+        else if (k === "fill") { persist(); drawPreview(performance.now(), true); }
+        else schedule();
       });
     });
 
-    const exportOnly = new Set(["scale", "frame", "fps"]);
+    const exportOnly = new Set(["scale", "fps"]);
+    const layoutOnly = new Set(["frame", "place", "res"]);
     document.querySelectorAll(".seg").forEach((seg) => {
       seg.addEventListener("click", (e) => {
         const b = e.target.closest("button");
@@ -615,6 +703,7 @@
         state[key] = typeof DEFAULTS[key] === "number" ? parseFloat(v) : v;
         syncUI();
         if (exportOnly.has(key)) persist();
+        else if (layoutOnly.has(key)) { persist(); layoutPreview(); }
         else if (key === "bgMode") { persist(); drawPreview(performance.now(), true); }
         else schedule();
       });
@@ -642,6 +731,9 @@
       syncUI(); persist();
       drawPreview(performance.now(), true);
     });
+
+    $("guides").addEventListener("change", (e) => { state.guides = e.target.checked; persist(); drawPreview(performance.now(), true); });
+    window.addEventListener("resize", () => { clearTimeout(wire.rt); wire.rt = setTimeout(layoutPreview, 120); });
 
     document.querySelectorAll("[data-export]").forEach((b) => (b.onclick = () => runExport(b.dataset.export)));
     $("copyPng").onclick = copyPng;

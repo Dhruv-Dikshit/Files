@@ -22,7 +22,7 @@ Then open http://localhost:8000. You can also double-click `index.html`, but upl
 | Look | Thickness (thin/regular/bold/heavy), fill / outline / drop-shadow / crayon grain, colour swatches + hex |
 | Hand-drawn feel | **Roughness** (edges that look drawn with a marker), **wobble** (each letter gets its own small rotation, scale and offset), **🎲 reshuffle** (a new random variation) |
 | Animation | **Line boil**: 4 redrawn frames at 6 / 8 / 12 drawings per second (on 4s, 3s or 2s at 24 fps) |
-| Editor exports | PNG sequence with alpha, MP4 on black / white / green, WebM with alpha, PNG still. You can set the frame size (fit, 1080p, 4K, 9:16, 1:1), the fps (24/25/30/60) and the length |
+| Editor exports | PNG sequence with alpha, MP4 on black / white / green, WebM with alpha, PNG still. You can set the frame (fit text, **9:16** Reels/Shorts/TikTok, **4:5** IG feed, **3:4** IG grid, 1:1, 16:9) in HD or 4K, the fps (24/25/30/60) and the length |
 | Workflow | Settings are remembered, named presets, a style link, ⌘S saves a PNG |
 
 ## Build your own font from Procreate drawings
@@ -46,6 +46,22 @@ More details:
 - Roughness, wobble, thickness, outline, shadow and crayon all work on drawn letters too.
 - Letters you haven't drawn yet fall back to a handwritten font, so you can test as you go.
 - **⬇ export pack** saves the whole font as one `.scribblefont` file for backup or another computer. **import pack** loads it back. Fonts are stored in the browser (IndexedDB) and never uploaded anywhere.
+
+## Short-form frames (Reels, Shorts, TikTok, IG feed)
+
+| Frame | Size (HD / 4K) | For |
+|---|---|---|
+| **9:16** | 1080×1920 / 2160×3840 | Instagram Reels, YouTube Shorts, TikTok, Stories |
+| **4:5** | 1080×1350 / 2160×2700 | Instagram & Facebook feed (portrait) |
+| **3:4** | 1080×1440 / 2160×2880 | Instagram profile grid, Threads |
+| **1:1** | 1080×1080 / 2160×2160 | Square posts |
+| **16:9** | 1920×1080 / 3840×2160 | YouTube, regular edits |
+| **fit text** | hugs the lettering | A free-floating overlay you position in your editor |
+
+- **Safe zones**: the preview shades the areas the apps cover. On 9:16 that's the header, the caption / @handle / audio bar and the like / comment / share column. It uses the strictest of Reels, Shorts and TikTok, so text placed inside the dashed box is safe on all three. The guides are never exported.
+- **Position** (top / center / lower) and **text width** place the lettering inside the safe box.
+- Lettering is re-rendered at the exact size it lands in the frame, so 4K exports stay sharp instead of being upscaled.
+- File names include the ratio, for example `my-title-9x16-screen.mp4`.
 
 ## Exports for Premiere Pro / DaVinci Resolve / After Effects
 

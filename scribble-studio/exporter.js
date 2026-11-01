@@ -12,31 +12,101 @@
 window.Exporter = (() => {
   "use strict";
 
+  /** Base sizes (HD). "4K" doubles them: 9:16 → 2160×3840, 16:9 → 3840×2160. */
   const FRAMES = {
     fit: null,
-    "1080p": [1920, 1080],
-    "4k": [3840, 2160],
-    vertical: [1080, 1920],
-    square: [1080, 1080],
+    "9:16": [1080, 1920], // Reels, Shorts, TikTok, Stories
+    "4:5": [1080, 1350],  // Instagram / Facebook feed portrait
+    "3:4": [1080, 1440],  // Instagram grid (new), Pinterest-ish
+    "1:1": [1080, 1080],
+    "16:9": [1920, 1080], // YouTube, regular edits
   };
-  const MAX_AVC = [4096, 2304];
+
+  /**
+   * Where platform UI covers the video (fractions of the frame).
+   * 9:16: profile/caption/audio bar at the bottom, like/comment/share column at the right,
+   * header/tabs at the top — the strictest of Reels, Shorts and TikTok.
+   */
+  const SAFE = {
+    "9:16": { t: 0.14, b: 0.3, l: 0.06, r: 0.16 },
+    "4:5": { t: 0.05, b: 0.08, l: 0.05, r: 0.05 },
+    "3:4": { t: 0.05, b: 0.08, l: 0.05, r: 0.05 },
+    "1:1": { t: 0.05, b: 0.05, l: 0.05, r: 0.05 },
+    "16:9": { t: 0.05, b: 0.05, l: 0.05, r: 0.05 }, // title-safe
+  };
+
+  // H.264 level 5.2 frame-size limit (in pixels), and a sane max side
+  const MAX_AVC_AREA = 4096 * 2304;
+  const MAX_AVC_SIDE = 4096;
 
   const even = (n) => Math.max(2, Math.round(n / 2) * 2);
 
+  function frameSize(spec, drawing) {
+    const base = FRAMES[spec.frame];
+    if (!base) return [even(drawing.width), even(drawing.height)];
+    const r = spec.res || 1;
+    return [base[0] * r, base[1] * r];
+  }
+
+  function safeBox(spec, W, H) {
+    const s = SAFE[spec.frame] || { t: 0, b: 0, l: 0, r: 0 };
+    return { x: W * s.l, y: H * s.t, w: W * (1 - s.l - s.r), h: H * (1 - s.t - s.b) };
+  }
+
+  /** Union bounding box of non-transparent pixels across drawings (the ink, without padding). */
+  function contentBox(canvases) {
+    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+    for (const c of canvases) {
+      const { width: W, height: H } = c;
+      const d = c.getContext("2d").getImageData(0, 0, W, H).data;
+      for (let y = 0; y < H; y++) {
+        const row = y * W * 4;
+        for (let x = 0; x < W; x++) {
+          if (d[row + x * 4 + 3] > 10) {
+            if (x < x0) x0 = x; if (x > x1) x1 = x;
+            if (y < y0) y0 = y; if (y > y1) y1 = y;
+          }
+        }
+      }
+    }
+    if (x1 < 0) return { x: 0, y: 0, w: canvases[0].width, h: canvases[0].height };
+    return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+  }
+
+  /**
+   * Where to draw a drawing inside a W×H frame.
+   * spec: { frame, place: "top"|"center"|"bottom", fill: % of safe width }
+   */
+  function placement(spec, W, H, d, cb) {
+    if (!FRAMES[spec.frame]) return { x: 0, y: 0, s: 1 };
+    const sb = safeBox(spec, W, H);
+    const s = Math.min((sb.w * (spec.fill || 70)) / 100 / cb.w, sb.h / cb.h);
+    const cx = sb.x + sb.w / 2;
+    const half = (cb.h * s) / 2;
+    const cy = spec.place === "top" ? sb.y + half : spec.place === "bottom" ? sb.y + sb.h - half : sb.y + sb.h / 2;
+    return { x: cx - (cb.x + cb.w / 2) * s, y: cy - (cb.y + cb.h / 2) * s, s };
+  }
+
+  /** The render scale that makes the ink land at 1:1 pixels in the frame (crisp, no upscaling). */
+  function idealScale(spec, cbAtScale1) {
+    const [W, H] = frameSize(spec, { width: 2, height: 2 });
+    const sb = safeBox(spec, W, H);
+    return Math.min((sb.w * (spec.fill || 70)) / 100 / cbAtScale1.w, sb.h / cbAtScale1.h);
+  }
+
   /** Places boil drawings into output-sized canvases. bg: null (transparent) or a CSS colour. */
-  function compose(drawings, frame, bg) {
-    let [W, H] = FRAMES[frame] || [drawings[0].width, drawings[0].height];
-    W = even(W); H = even(H);
+  function compose(drawings, spec, bg) {
+    if (typeof spec === "string") spec = { frame: spec };
+    const [W, H] = frameSize(spec, drawings[0]);
+    const cb = FRAMES[spec.frame] ? contentBox(drawings) : null;
     return drawings.map((d) => {
       const c = document.createElement("canvas");
       c.width = W; c.height = H;
       const ctx = c.getContext("2d");
       if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H); }
-      const fixed = !!FRAMES[frame];
-      const s = fixed ? Math.min(1, (W * 0.9) / d.width, (H * 0.9) / d.height) : 1;
-      const dw = d.width * s, dh = d.height * s;
+      const p = placement(spec, W, H, d, cb);
       ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(d, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.drawImage(d, p.x, p.y, d.width * p.s, d.height * p.s);
       return c;
     });
   }
@@ -47,7 +117,7 @@ window.Exporter = (() => {
   // ---------- MP4 (H.264) ----------
   function fitAvc(canvases) {
     const { width: W, height: H } = canvases[0];
-    const s = Math.min(1, MAX_AVC[0] / W, MAX_AVC[1] / H);
+    const s = Math.min(1, Math.sqrt(MAX_AVC_AREA / (W * H)), MAX_AVC_SIDE / Math.max(W, H));
     if (s >= 1) return canvases;
     return canvases.map((c) => {
       const o = document.createElement("canvas");
@@ -243,5 +313,5 @@ FINAL CUT PRO
 Made with Scribble Studio.
 `;
 
-  return { compose, mp4, webm, pngSequence, FRAMES };
+  return { compose, mp4, webm, pngSequence, FRAMES, SAFE, frameSize, safeBox, contentBox, placement, idealScale };
 })();

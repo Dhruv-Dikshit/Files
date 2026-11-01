@@ -271,3 +271,10 @@ input[type="color"] {
   .kb-row { gap: 3px; }
   .kb-row:nth-child(n) { margin-left: 0; }
 }
+
+/* ---------- v3: social frames ---------- */
+.seg.frames button { display: flex; flex-direction: column; align-items: center; line-height: 1.1; padding: 6px 10px; }
+.seg.frames button small { font: 500 9px system-ui, sans-serif; text-transform: none; opacity: 0.8; margin-top: 2px; }
+.chk-inline { display: flex; align-items: center; gap: 6px; font: 13px system-ui, sans-serif; white-space: nowrap; margin-left: 8px; }
+.chk-inline input { accent-color: #fff; }
+#preview.framed { box-shadow: 0 0 0 1px rgba(0,0,0,0.12), 0 8px 24px rgba(0,0,0,0.08); border-radius: 10px; }
