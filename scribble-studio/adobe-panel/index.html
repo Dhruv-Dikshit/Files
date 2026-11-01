@@ -4,67 +4,134 @@
   <meta charset="utf-8" />
   <title>Scribble Studio</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #f3f2ee; font: 13px system-ui, sans-serif; color: #222; }
-    iframe { border: 0; width: 100%; height: 100%; display: block; }
+    html, body { margin: 0; height: 100%; background: #f3f2ee; font: 12px system-ui, sans-serif; color: #222; }
+    body { display: flex; flex-direction: column; }
+    #top {
+      display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+      background: #4b5bd6; color: #fff; flex: 0 0 auto;
+    }
+    #top b { letter-spacing: 0.06em; font-weight: 600; }
+    #top label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+    #top .sp { flex: 1; }
+    #top button { background: #fff; color: #3443b8; border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; font: inherit; }
+    #status { opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+    iframe { border: 0; width: 100%; flex: 1; display: block; }
     #offline { display: none; padding: 24px; line-height: 1.5; }
     #offline code { background: #fff; padding: 2px 6px; border-radius: 4px; }
     #offline button { margin-top: 12px; padding: 8px 14px; border: 0; border-radius: 6px; background: #4b5bd6; color: #fff; cursor: pointer; }
-    #bar { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); background: #222; color: #fff;
-           padding: 6px 12px; border-radius: 6px; display: none; }
   </style>
 </head>
 <body>
+  <div id="top">
+    <b>scribble studio</b>
+    <label title="Also put each export on the timeline (Premiere: at the playhead on a free track above V1 · After Effects: in the active comp at the current time)">
+      <input type="checkbox" id="place" checked /> place on timeline
+    </label>
+    <span class="sp"></span>
+    <span id="status">connecting…</span>
+    <button id="reload" title="Reload the app">↻</button>
+  </div>
   <div id="offline">
-    <h2>Scribble Studio isn't running</h2>
-    <p>Start the helper on this Mac, then press retry:</p>
-    <p><code>cd ~/files/scribble-studio &amp;&amp; python3 server.py</code></p>
-    <p>(or open <b>Scribble Studio.app</b> if you made one with <code>mac/make-app.sh</code>)</p>
+    <h2>Couldn't start Scribble Studio</h2>
+    <p id="why">The helper isn't running.</p>
+    <p>Start it in Terminal, then press retry:</p>
+    <p><code id="cmd">cd ~/files/scribble-studio &amp;&amp; python3 server.py</code></p>
+    <p>(or open <b>Scribble Studio.app</b>)</p>
     <button id="retry">retry</button>
   </div>
-  <iframe id="app" title="Scribble Studio"></iframe>
-  <div id="bar"></div>
+  <iframe id="app" title="Scribble Studio" style="display:none"></iframe>
 
+  <script src="config.js"></script>
   <script>
-    // The panel hosts the real app (served by server.py) and imports finished exports into the open project.
+    // The panel hosts the real app (served by server.py) and imports finished exports into the open
+    // project. If the helper isn't running it starts it (CEP's built-in Node.js).
     var URL_BASE = "http://localhost:8000/";
+    var CFG = window.SCRIBBLE || {};
     var frame = document.getElementById("app");
     var offline = document.getElementById("offline");
-    var bar = document.getElementById("bar");
+    var statusEl = document.getElementById("status");
+    var place = document.getElementById("place");
 
-    function say(msg) {
-      bar.textContent = msg;
-      bar.style.display = "block";
-      clearTimeout(say.t);
-      say.t = setTimeout(function () { bar.style.display = "none"; }, 3500);
+    try { place.checked = localStorage.getItem("scribble:place") !== "0"; } catch (e) {}
+    place.onchange = function () { try { localStorage.setItem("scribble:place", place.checked ? "1" : "0"); } catch (e) {} };
+    if (CFG.serverDir) document.getElementById("cmd").textContent = 'cd "' + CFG.serverDir + '" && python3 server.py';
+
+    function status(msg) { statusEl.textContent = msg; statusEl.title = msg; }
+
+    function evalHost(script, cb) {
+      if (!window.__adobe_cep__) { cb && cb("error: not running inside Premiere/After Effects"); return; }
+      window.__adobe_cep__.evalScript(script, function (r) { cb && cb(r); });
     }
 
-    function connect() {
-      fetch(URL_BASE + "api/status", { cache: "no-store" })
-        .then(function (r) { return r.json(); })
-        .then(function () {
-          offline.style.display = "none";
-          frame.style.display = "block";
-          frame.src = URL_BASE + "?host=adobe";
-        })
-        .catch(function () {
-          frame.style.display = "none";
-          offline.style.display = "block";
+    function ping() {
+      return fetch(URL_BASE + "api/status", { cache: "no-store" }).then(function (r) { return r.json(); });
+    }
+
+    function startHelper() {
+      // Needs --enable-nodejs (see CSXS/manifest.xml) and the folder written by install.sh.
+      if (typeof require !== "function" || !CFG.serverDir) return false;
+      try {
+        var cp = require("child_process");
+        var env = Object.assign({}, process.env, { PATH: "/opt/homebrew/bin:/usr/local/bin:" + (process.env.PATH || "") });
+        var child = cp.spawn("/usr/bin/python3", [CFG.serverDir + "/server.py"], {
+          cwd: CFG.serverDir, detached: true, stdio: "ignore", env: env,
         });
+        child.unref();
+        return true;
+      } catch (e) {
+        document.getElementById("why").textContent = "Couldn't start the helper: " + e.message;
+        return false;
+      }
     }
-    document.getElementById("retry").onclick = connect;
+
+    function show(ok) {
+      offline.style.display = ok ? "none" : "block";
+      frame.style.display = ok ? "block" : "none";
+    }
+
+    function connect(allowStart) {
+      status("connecting…");
+      ping().then(function (s) {
+        show(true);
+        frame.src = URL_BASE + "?host=adobe";
+        evalHost("scribbleHostName()", function (h) {
+          var name = h === "premierepro" ? "Premiere Pro" : h === "aftereffects" ? "After Effects" : "browser";
+          status("ready · " + name + (s.formats && s.formats.prores4444 && s.formats.prores4444.available ? " · ProRes ✓" : " · no ffmpeg"));
+        });
+      }).catch(function () {
+        if (allowStart && startHelper()) {
+          status("starting helper…");
+          var tries = 0;
+          var t = setInterval(function () {
+            ping().then(function () { clearInterval(t); connect(false); }).catch(function () {
+              if (++tries > 20) { clearInterval(t); show(false); status("helper didn't start"); }
+            });
+          }, 500);
+        } else {
+          show(false);
+          status("helper not running");
+        }
+      });
+    }
+
+    document.getElementById("retry").onclick = function () { connect(true); };
+    document.getElementById("reload").onclick = function () { connect(true); };
 
     window.addEventListener("message", function (e) {
       if (e.origin.indexOf("http://localhost") !== 0 && e.origin.indexOf("http://127.0.0.1") !== 0) return;
       var d = e.data || {};
       if (d.type !== "scribble:import" || typeof d.path !== "string") return;
-      var script = "scribbleImport(" + JSON.stringify(d.path) + "," + (d.sequence ? "true" : "false") + ")";
-      if (!window.__adobe_cep__) { say("Not running inside Premiere/After Effects"); return; }
-      window.__adobe_cep__.evalScript(script, function (res) {
-        say(res && res.indexOf("ok") === 0 ? "Imported ✓ " + res.slice(3) : "Import failed: " + res);
+      var script = "scribbleImport(" + JSON.stringify(d.path) + "," + (d.sequence ? "true" : "false") + "," + (place.checked ? "true" : "false") + ")";
+      status("importing…");
+      evalHost(script, function (res) {
+        res = String(res || "");
+        var ok = res.indexOf("ok") === 0;
+        status(ok ? "✓ " + res.slice(3) : "✗ " + res.replace(/^error:\s*/, ""));
+        if (frame.contentWindow) frame.contentWindow.postMessage({ type: "scribble:imported", ok: ok, message: res }, "*");
       });
     });
 
-    connect();
+    connect(true);
   </script>
 </body>
 </html>

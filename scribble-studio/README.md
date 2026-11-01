@@ -23,15 +23,23 @@ bash mac/make-app.sh
 
 This builds **~/Applications/Scribble Studio.app**. Double-click it (the first time, right-click → Open, because it isn't notarised). It starts the helper in the background and opens the app in its own Chrome/Edge window, or your default browser. Logs go to `~/Library/Logs/scribble-studio.log`.
 
-### Inside Premiere Pro / After Effects
+### Inside Premiere Pro / After Effects (panel)
 
 ```bash
 bash adobe-panel/install.sh
 ```
 
-Start the helper (or the Mac app), then restart Premiere/AE → **Window → Extensions → Scribble Studio**. The full app runs in a panel. Every export is **imported straight into your project**, into a "Scribble Studio" bin in Premiere, or into a folder and the active comp in After Effects. PNG sequences come in as one image-sequence clip. ProRes 4444 is the best choice in the panel.
+Quit and reopen Premiere Pro or After Effects → **Window → Extensions → Scribble Studio**.
 
-The panel is unsigned, so the installer turns on Adobe's `PlayerDebugMode` for CEP 9–12. Unsigned panels need that.
+- The full app runs in the panel. **It starts the helper by itself**, so there's no Terminal needed. `install.sh` records where `server.py` lives; re-run it if you move the folder.
+- Every export is **imported into your project**: a "Scribble Studio" bin in Premiere, a "Scribble Studio" folder in After Effects.
+- With **place on timeline** ticked (the checkbox in the panel's top bar):
+  - **Premiere**: the clip goes onto the active sequence **at the playhead**, on the lowest video track above V1 that's free at that moment. So it lands over your footage, never on it.
+  - **After Effects**: it's added as a layer to the active comp, starting at the current time.
+- PNG sequences come in as one image-sequence clip. ProRes 4444 is the best choice: a single file with transparency.
+- The status bar shows what happened ("✓ placed on the timeline at the playhead"), or why it couldn't (no project open, no active sequence…).
+
+It's a CEP panel, which Premiere Pro and After Effects 2020–2025 load. It isn't signed by Adobe, so the installer turns on `PlayerDebugMode`, which unsigned panels need.
 
 ## What it does today
 

@@ -659,13 +659,22 @@
   // Running inside the Premiere Pro / After Effects panel (adobe-panel/)? Exports go straight into the project.
   const inAdobe = new URLSearchParams(location.search).get("host") === "adobe" && window.parent !== window;
 
+  if (inAdobe) {
+    // the panel reports back what Premiere / After Effects did with the file
+    window.addEventListener("message", (e) => {
+      const d = e.data || {};
+      if (e.source !== window.parent || d.type !== "scribble:imported") return;
+      toast(d.ok ? "✓ " + String(d.message).slice(3) : "Import failed: " + String(d.message).replace(/^error:\s*/, ""));
+    });
+  }
+
   async function sendToAdobe(blob, name) {
     if (!inAdobe) return false;
     const helper = await window.Exporter.helperStatus();
     if (!helper.helper) { toast("Panel needs the helper (python3 server.py) to hand files to Premiere/AE"); return false; }
     const { path, sequence } = await window.Exporter.helperSave(blob, name);
     window.parent.postMessage({ type: "scribble:import", path, sequence: !!sequence }, "*");
-    toast(`Imported into your project · ${name}`);
+    toast(`Sending ${name} to your project…`);
     return true;
   }
 
@@ -673,7 +682,7 @@
     const mb = (out.bytes / 1048576).toFixed(1);
     if (inAdobe) {
       window.parent.postMessage({ type: "scribble:import", path: out.path }, "*");
-      toast(`Imported into your project (${mb} MB)`);
+      toast(`Sending ${mb} MB to your project…`);
       return;
     }
     const a = document.createElement("a");

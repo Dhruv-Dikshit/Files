@@ -26,6 +26,8 @@
           <ScriptPath>./host.jsx</ScriptPath>
           <CEFCommandLine>
             <Parameter>--allow-running-insecure-content</Parameter>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
           </CEFCommandLine>
         </Resources>
         <Lifecycle>

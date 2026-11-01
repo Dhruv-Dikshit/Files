@@ -119,10 +119,12 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     # ---- helpers
-    def send_json(self, obj, code=200):
+    def send_json(self, obj, code=200, cors=False):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        if cors:  # read-only status check, used by the Premiere/AE panel (loaded from file://)
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -151,7 +153,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({
                 "helper": True, "ffmpeg": self.ffmpeg, "formats": formats,
                 "outDir": str(self.out_dir), "platform": sys.platform,
-            })
+            }, cors=True)
         m = re.match(r"^/api/job/([a-f0-9]{32})/file$", self.path)
         if m:
             job = jobs.get(m.group(1))
